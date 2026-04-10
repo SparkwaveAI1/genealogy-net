@@ -1,0 +1,104 @@
+import Anthropic from '@anthropic-ai/sdk';
+import { NextRequest, NextResponse } from 'next/server';
+
+const anthropic = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
+});
+
+const GENEALOGY_SYSTEM_PROMPT = `You are a genealogy research assistant specializing in the Johnson-Schoenberg-Sackerson family history.
+
+When providing genealogical information:
+- Always indicate your confidence level (High, Medium, Low) for each claim
+- Cite sources when available (e.g., "According to the 1920 census..." or "Family Bible records indicate...")
+- Distinguish between verified facts and family traditions/stories
+- Note any conflicting information or uncertainties
+- Suggest next steps for research when relevant
+- Be particularly attentive to details about the Johnson, Schoenberg, and Sackerson family lines
+
+Format your responses to be clear and well-organized, using confidence indicators like:
+[High confidence] - Verified by primary sources
+[Medium confidence] - Supported by secondary sources or circumstantial evidence
+[Low confidence] - Based on family tradition or requires verification`;
+
+// Rate limiting: 20 requests per hour
+const RATE_LIMIT = 20;
+const RATE_LIMIT_WINDOW = 60 * 60 * 1000; // 1 hour in milliseconds
+
+type RateLimitEntry = {
+  count: number;
+  timestamps: number[];
+};
+
+const rateLimitMap = new Map<string, RateLimitEntry>();
+
+function getRateLimitKey(req: NextRequest): string {
+  // Use IP address or fallback to a default key
+  const forwarded = req.headers.get('x-forwarded-for');
+  const ip = forwarded ? forwarded.split(',')[0] : req.headers.get('x-real-ip') || 'unknown';
+  return ip;
+}
+
+function checkRateLimit(key: string): boolean {
+  const now = Date.now();
+  const entry = rateLimitMap.get(key);
+
+  if (!entry) {
+    rateLimitMap.set(key, { count: 1, timestamps: [now] });
+    return true;
+  }
+
+  // Remove timestamps older than the rate limit window
+  entry.timestamps = entry.timestamps.filter(
+    (timestamp) => now - timestamp < RATE_LIMIT_WINDOW
+  );
+
+  if (entry.timestamps.length >= RATE_LIMIT) {
+    return false;
+  }
+
+  entry.timestamps.push(now);
+  entry.count = entry.timestamps.length;
+  rateLimitMap.set(key, entry);
+
+  return true;
+}
+
+export async function POST(req: NextRequest) {
+  // Check rate limit
+  const rateLimitKey = getRateLimitKey(req);
+  if (!checkRateLimit(rateLimitKey)) {
+    return NextResponse.json(
+      { error: 'Rate limit exceeded. Maximum 20 requests per hour.' },
+      { status: 429 }
+    );
+  }
+  try {
+    const body = await req.json();
+    const { messages, deep } = body;
+
+    if (!messages || !Array.isArray(messages)) {
+      return NextResponse.json(
+        { error: 'Messages array is required' },
+        { status: 400 }
+      );
+    }
+
+    // Select model based on deep parameter
+    const model = deep === true ? 'claude-sonnet-4-6' : 'claude-haiku-4-5';
+
+    const response = await anthropic.messages.create({
+      model,
+      max_tokens: 1000,
+      system: GENEALOGY_SYSTEM_PROMPT,
+      messages,
+    });
+
+    return NextResponse.json(response);
+  } catch (error: any) {
+    console.error('Anthropic API error:', error);
+    return NextResponse.json(
+      { error: error.message || 'An error occurred' },
+      { status: 500 }
+    );
+  }
+}
