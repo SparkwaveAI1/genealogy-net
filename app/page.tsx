@@ -239,7 +239,7 @@ export default function Home() {
                 <p className="text-sm text-zinc-800 whitespace-pre-wrap mb-3">
                   {geminiResult.text}
                 </p>
-                {geminiResult.sources.length > 0 && (
+                {geminiResult.sources && geminiResult.sources.length > 0 && (
                   <div className="border-t border-blue-200 pt-3 mt-3">
                     <p className="text-xs font-semibold text-blue-900 mb-2">
                       Sources:

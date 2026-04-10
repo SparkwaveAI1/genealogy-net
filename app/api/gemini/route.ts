@@ -1,7 +1,4 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
 import { NextRequest, NextResponse } from 'next/server';
-
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
 
 export async function POST(req: NextRequest) {
   try {
@@ -15,35 +12,58 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const model = genAI.getGenerativeModel({
-      model: 'gemini-2.0-flash-exp',
-      generationConfig: {
-        temperature: 1,
-        topP: 0.95,
-        topK: 40,
-        maxOutputTokens: 8192,
+    // Use Gemini REST API directly with Google Search grounding
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`;
+
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
       },
-    });
-
-    // Enable Google Search grounding
-    const result = await model.generateContent({
-      contents: [{ role: 'user', parts: [{ text: query }] }],
-      tools: [
-        {
-          googleSearch: {},
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              {
+                text: query,
+              },
+            ],
+          },
+        ],
+        tools: [
+          {
+            googleSearchRetrieval: {},
+          },
+        ],
+        generationConfig: {
+          temperature: 1,
+          topP: 0.95,
+          topK: 40,
+          maxOutputTokens: 8192,
         },
-      ],
+      }),
     });
 
-    const response = result.response;
-    const text = response.text();
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(
+        `Gemini API error: ${errorData.error?.message || response.statusText}`
+      );
+    }
+
+    const data = await response.json();
+
+    // Extract text from response
+    const text =
+      data.candidates?.[0]?.content?.parts?.[0]?.text || 'No response generated';
 
     // Extract grounding metadata (sources)
-    const groundingMetadata = response.candidates?.[0]?.groundingMetadata;
-    const sources = groundingMetadata?.groundingChunks?.map((chunk: any) => ({
-      title: chunk.web?.title || 'Unknown',
-      uri: chunk.web?.uri || '',
-    })) || [];
+    const groundingMetadata = data.candidates?.[0]?.groundingMetadata;
+    const sources =
+      groundingMetadata?.groundingChunks?.map((chunk: any) => ({
+        title: chunk.web?.title || 'Unknown Source',
+        uri: chunk.web?.uri || '',
+      })) || [];
 
     return NextResponse.json({
       text,
