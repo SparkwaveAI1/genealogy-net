@@ -3,6 +3,7 @@ import path from 'path'
 import crypto from 'crypto'
 import { supabase } from '../lib/supabase'
 import { Person, FamilyRelationship } from '../lib/types'
+import { registerAhnentafelNumber, runValidation, printReport, saveReport } from './lib/validation'
 
 // Generate stable UUID from ahnentafel number
 function generateStableUUID(ahnNumber: number): string {
@@ -196,6 +197,9 @@ async function importAhnentafel() {
     const uuid = generateStableUUID(entry.number)
     uuidMap.set(entry.number, uuid)
 
+    // Register ahnentafel number for validation
+    registerAhnentafelNumber(uuid, entry.number)
+
     const { given_name, surname } = parseName(entry.name)
     const birth_year = extractYear(entry.birthDate)
     const death_year = extractYear(entry.deathDate)
@@ -344,6 +348,12 @@ async function importAhnentafel() {
   console.log(`People errors: ${errorCount}`)
   console.log(`Relationships created: ${relInsertedCount}`)
   console.log(`Relationship errors: ${relErrorCount}`)
+
+  // Run validation
+  console.log('\n=== Running Validation ===')
+  const report = await runValidation()
+  printReport(report)
+  await saveReport(report)
 }
 
 importAhnentafel().catch(console.error)
