@@ -10,24 +10,30 @@ function ConfidenceBadge({ confidence }: { confidence?: string }) {
     contradicted: 'bg-red-100 text-red-800',
   }
 
-  const color = colors[confidence as keyof typeof colors] || 'bg-gray-100 text-gray-800'
+  const color = colors[confidence as keyof typeof colors] || 'bg-gray-100 text-gray-500'
 
   return (
     <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${color}`}>
-      {confidence || 'unknown'}
+      {confidence || 'not set'}
     </span>
   )
 }
 
 export default async function Dashboard() {
-  // Query stats
-  const { data: allPeople } = await supabase
+  // Query stats with count
+  const { count: totalCount } = await supabase
     .from('people')
-    .select('id, confidence, needs_review')
+    .select('*', { count: 'exact', head: true })
 
-  const totalCount = allPeople?.length || 0
-  const confirmedCount = allPeople?.filter(p => p.confidence === 'confirmed').length || 0
-  const needsReviewCount = allPeople?.filter(p => p.needs_review === true).length || 0
+  const { count: confirmedCount } = await supabase
+    .from('people')
+    .select('*', { count: 'exact', head: true })
+    .eq('confidence', 'confirmed')
+
+  const { count: needsReviewCount } = await supabase
+    .from('people')
+    .select('*', { count: 'exact', head: true })
+    .eq('needs_review', true)
 
   // Query mysteries (may not exist)
   let mysteriesData = null

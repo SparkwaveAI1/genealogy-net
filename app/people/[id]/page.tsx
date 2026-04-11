@@ -12,11 +12,11 @@ function ConfidenceBadge({ confidence }: { confidence?: string }) {
     contradicted: 'bg-red-100 text-red-800',
   }
 
-  const color = colors[confidence as keyof typeof colors] || 'bg-gray-100 text-gray-800'
+  const color = colors[confidence as keyof typeof colors] || 'bg-gray-100 text-gray-500'
 
   return (
     <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${color}`}>
-      {confidence || 'unknown'}
+      {confidence || 'not set'}
     </span>
   )
 }
@@ -99,7 +99,7 @@ export default async function PersonPage({ params }: PageProps) {
   // For now, we'll leave this as a placeholder since the exact schema isn't clear
   const sources: any[] = []
 
-  const fullName = `${person.given_name || ''} ${person.surname || ''}`.trim()
+  const fullName = [person.given_name, person.surname].filter(Boolean).join(' ') || 'Unknown Name'
   const lifeDates = person.birth_year && person.death_year
     ? `${person.birth_year} - ${person.death_year}`
     : person.birth_year

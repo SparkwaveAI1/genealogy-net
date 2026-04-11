@@ -14,11 +14,11 @@ function ConfidenceBadge({ confidence }: { confidence?: string }) {
     contradicted: 'bg-red-100 text-red-800',
   }
 
-  const color = colors[confidence as keyof typeof colors] || 'bg-gray-100 text-gray-800'
+  const color = colors[confidence as keyof typeof colors] || 'bg-gray-100 text-gray-500'
 
   return (
     <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${color}`}>
-      {confidence || 'unknown'}
+      {confidence || 'not set'}
     </span>
   )
 }
@@ -44,9 +44,9 @@ export default function PeoplePage() {
 
   async function fetchPeople() {
     setIsLoading(true)
-    const { data, error } = await supabase
+    const { data, error, count } = await supabase
       .from('people')
-      .select('*')
+      .select('*', { count: 'exact' })
       .order('surname', { ascending: true })
 
     if (data) {
