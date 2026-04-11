@@ -239,6 +239,18 @@ export async function runValidation(): Promise<ValidationReport> {
 
     // === CONFIDENCE CHECKS ===
 
+    // Hypothetical confidence level (very low)
+    if (person.confidence === 'hypothetical') {
+      report.warnings.push({
+        severity: 'warning',
+        personId: person.id!,
+        personName: getPersonDisplay(person),
+        ahnentafelNumber: ahnNum,
+        issue: `Has hypothetical confidence level (name contains placeholders)`,
+        suggestion: 'Research actual identity from primary sources'
+      })
+    }
+
     // Low confidence for direct ancestors (generations 1-5)
     if (generation >= 1 && generation <= 5) {
       if (person.confidence === 'possible' || !person.confidence) {

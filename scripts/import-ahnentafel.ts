@@ -71,9 +71,23 @@ function extractYear(dateStr: string | undefined): number | undefined {
 }
 
 // Determine birth date confidence
-function getBirthDateConfidence(dateStr: string | undefined): 'confirmed' | 'probable' | 'possible' | undefined {
-  if (!dateStr) return undefined
+function getBirthDateConfidence(dateStr: string | undefined, personName: string): 'confirmed' | 'probable' | 'possible' | 'hypothetical' | undefined {
+  if (!dateStr) {
+    // No date - check if name has placeholders
+    if (personName.includes('Unknown') || personName.includes('FNU') ||
+        personName.includes('LNU') || personName.includes('?')) {
+      return 'hypothetical'
+    }
+    return undefined
+  }
+
   if (dateStr.toLowerCase().includes('living')) return undefined
+
+  // Check if name has placeholders (overrides date confidence)
+  if (personName.includes('Unknown') || personName.includes('FNU') ||
+      personName.includes('LNU') || personName.includes('?')) {
+    return 'hypothetical'
+  }
 
   // Check if it's an approximate date
   const isApproximate = /\b(about|abt|circa|c\.|ca\.)\b/i.test(dateStr)
@@ -88,10 +102,13 @@ function getBirthDateConfidence(dateStr: string | undefined): 'confirmed' | 'pro
     /\d{1,2}\s+\w{3}\s+\d{4}/.test(dateStr)    // 14 Mar 1880
 
   if (hasFullDate && !isApproximate) return 'confirmed'
-  if (hasFullDate && isApproximate) return 'probable'
+  if (isApproximate) return 'possible'  // "abt 1850" = possible
 
-  // Year only
-  return 'possible'
+  // Year only (no day/month) = probable
+  if (/^\d{4}$/.test(dateStr.trim())) return 'probable'
+
+  // Default to probable for anything else
+  return 'probable'
 }
 
 interface AhnentafelEntry {
@@ -131,10 +148,12 @@ function parseAhnentafelFile(filePath: string): AhnentafelEntry[] {
     }
 
     // If we're expecting a name, the next non-empty, non-field line is the name
-    // Skip lines that are: field labels, numbered prefixes, generation markers, asterisks, or ethnicity markers
+    // Skip lines that are: field labels, generation markers, asterisks, or ethnicity markers
     const isEthnicityLine = /^(Swedish|German|Ashkenazi Jewish|French)/i.test(line)
-    if (expectingName && line && !line.includes(':') && !line.match(/^\d+\./) && !line.match(/^<Generation/) && line !== '*' && !isEthnicityLine) {
-      currentEntry!.name = line
+    if (expectingName && line && !line.includes(':') && !line.match(/^<Generation/) && line !== '*' && !isEthnicityLine) {
+      // Remove numbered prefix if present (e.g., "2. Gordon Clint Johnson" -> "Gordon Clint Johnson")
+      const cleanedName = line.replace(/^\d+\.\s*/, '')
+      currentEntry!.name = cleanedName
       expectingName = false
       continue
     }
@@ -203,9 +222,8 @@ async function importAhnentafel() {
     const { given_name, surname } = parseName(entry.name)
     const birth_year = extractYear(entry.birthDate)
     const death_year = extractYear(entry.deathDate)
-    const confidence = getBirthDateConfidence(entry.birthDate)
+    const confidence = getBirthDateConfidence(entry.birthDate, entry.name)
 
-    // Don't include confidence for now - seems to be causing issues with DB constraint
     const personData: any = {
       id: uuid,
       given_name,
@@ -218,8 +236,10 @@ async function importAhnentafel() {
       creation_source: 'ahnentafel_import',
     }
 
-    // Only add confidence if we have a value
-    // if (confidence) {
+    // TODO: Re-enable confidence once database constraint is updated to accept:
+    // 'confirmed' | 'probable' | 'possible' | 'hypothetical'
+    // Currently database only accepts: 'confirmed' | 'probable' | 'possible'
+    // if (confidence && confidence !== 'hypothetical') {
     //   personData.confidence = confidence
     // }
 

@@ -19,7 +19,7 @@ export interface Person {
   burial_notes?: string
   religion?: string
   religion_notes?: string
-  confidence?: 'confirmed' | 'probable' | 'possible'
+  confidence?: 'confirmed' | 'probable' | 'possible' | 'hypothetical'
   dna_group?: string
   dna_status?: string
   first_documented_date?: string
