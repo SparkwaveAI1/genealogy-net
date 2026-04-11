@@ -115,15 +115,15 @@ export default async function Dashboard() {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
             <div className="bg-white rounded-lg shadow p-6">
               <div className="text-sm font-medium text-gray-500 mb-1">Total People</div>
-              <div className="text-3xl font-bold text-gray-900">{totalCount.toLocaleString()}</div>
+              <div className="text-3xl font-bold text-gray-900">{(totalCount ?? 0).toLocaleString()}</div>
             </div>
             <div className="bg-white rounded-lg shadow p-6">
               <div className="text-sm font-medium text-gray-500 mb-1">Confirmed</div>
-              <div className="text-3xl font-bold text-green-600">{confirmedCount.toLocaleString()}</div>
+              <div className="text-3xl font-bold text-green-600">{(confirmedCount ?? 0).toLocaleString()}</div>
             </div>
             <div className="bg-white rounded-lg shadow p-6">
               <div className="text-sm font-medium text-gray-500 mb-1">Needs Review</div>
-              <div className="text-3xl font-bold text-orange-600">{needsReviewCount.toLocaleString()}</div>
+              <div className="text-3xl font-bold text-orange-600">{(needsReviewCount ?? 0).toLocaleString()}</div>
             </div>
           </div>
 
