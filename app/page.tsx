@@ -1,314 +1,210 @@
-'use client';
+import Link from 'next/link'
+import { supabase } from '@/lib/supabase'
 
-import { useState } from 'react';
+function ConfidenceBadge({ confidence }: { confidence?: string }) {
+  const colors = {
+    confirmed: 'bg-green-100 text-green-800',
+    probable: 'bg-blue-100 text-blue-800',
+    possible: 'bg-yellow-100 text-yellow-800',
+    hypothetical: 'bg-gray-100 text-gray-800',
+    contradicted: 'bg-red-100 text-red-800',
+  }
 
-type Message = {
-  role: 'user' | 'assistant';
-  content: string;
-};
-
-type GeminiResult = {
-  text: string;
-  sources: Array<{ title: string; uri: string }>;
-};
-
-export default function Home() {
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [input, setInput] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [geminiResult, setGeminiResult] = useState<GeminiResult | null>(null);
-  const [isGeminiLoading, setIsGeminiLoading] = useState(false);
-
-  // Document upload context
-  const [individualName, setIndividualName] = useState('');
-  const [documentType, setDocumentType] = useState('');
-  const [notes, setNotes] = useState('');
-  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
-
-  const quickPrompts = [
-    'What sources should I search for birth records?',
-    'How do I verify conflicting dates?',
-    'What are reliable genealogy databases?',
-    'How do I cite census records?',
-  ];
-
-  const handleQuickPrompt = (prompt: string) => {
-    setInput(prompt);
-  };
-
-  const handleSendMessage = async (useDeep = false) => {
-    if (!input.trim()) return;
-
-    const newMessage: Message = { role: 'user', content: input };
-    const updatedMessages = [...messages, newMessage];
-    setMessages(updatedMessages);
-    setInput('');
-    setIsLoading(true);
-
-    try {
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: updatedMessages.map((msg) => ({
-            role: msg.role,
-            content: msg.content,
-          })),
-          deep: useDeep,
-        }),
-      });
-
-      const data = await response.json();
-
-      if (data.content && data.content[0]?.text) {
-        setMessages([
-          ...updatedMessages,
-          { role: 'assistant', content: data.content[0].text },
-        ]);
-      }
-    } catch (error) {
-      console.error('Error sending message:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleDeepResearch = async () => {
-    if (!input.trim()) return;
-
-    setIsGeminiLoading(true);
-    setGeminiResult(null);
-
-    try {
-      const response = await fetch('/api/gemini', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: input }),
-      });
-
-      const data = await response.json();
-      setGeminiResult(data);
-    } catch (error) {
-      console.error('Error with deep research:', error);
-    } finally {
-      setIsGeminiLoading(false);
-    }
-  };
-
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      setUploadedFile(e.target.files[0]);
-    }
-  };
+  const color = colors[confidence as keyof typeof colors] || 'bg-gray-100 text-gray-800'
 
   return (
-    <div className="flex h-screen bg-zinc-50">
-      {/* Left Sidebar */}
-      <div className="w-80 bg-white border-r border-zinc-200 p-6 overflow-y-auto">
-        <h1 className="text-2xl font-bold text-zinc-900 mb-6">
-          Genealogy Research
-        </h1>
+    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${color}`}>
+      {confidence || 'unknown'}
+    </span>
+  )
+}
 
-        {/* Quick Prompts */}
-        <div className="mb-8">
-          <h2 className="text-sm font-semibold text-zinc-700 mb-3">
-            Quick Prompts
-          </h2>
-          <div className="space-y-2">
-            {quickPrompts.map((prompt, index) => (
-              <button
-                key={index}
-                onClick={() => handleQuickPrompt(prompt)}
-                className="w-full text-left text-sm px-3 py-2 rounded-lg bg-zinc-100 hover:bg-zinc-200 text-zinc-700 transition-colors"
+export default async function Dashboard() {
+  // Query stats
+  const { data: allPeople } = await supabase
+    .from('people')
+    .select('id, confidence, needs_review')
+
+  const totalCount = allPeople?.length || 0
+  const confirmedCount = allPeople?.filter(p => p.confidence === 'confirmed').length || 0
+  const needsReviewCount = allPeople?.filter(p => p.needs_review === true).length || 0
+
+  // Query mysteries (may not exist)
+  let mysteriesData = null
+  try {
+    const { data } = await supabase
+      .from('mysteries')
+      .select('*')
+      .limit(5)
+    mysteriesData = data
+  } catch (e) {
+    // Table doesn't exist yet
+  }
+
+  // Query recent people
+  const { data: recentPeople } = await supabase
+    .from('people')
+    .select('id, given_name, surname, birth_year, death_year, confidence, created_at')
+    .order('created_at', { ascending: false })
+    .limit(10)
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {/* Header */}
+      <header className="bg-white border-b border-gray-200">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+          <div className="flex items-center justify-between">
+            <h1 className="text-2xl font-bold text-gray-900">Genealogy Research</h1>
+            <nav className="flex gap-4">
+              <Link
+                href="/people"
+                className="px-4 py-2 text-sm font-medium text-gray-700 hover:text-gray-900 hover:bg-gray-100 rounded-md transition-colors"
               >
-                {prompt}
-              </button>
-            ))}
+                People
+              </Link>
+              <Link
+                href="/mysteries"
+                className="px-4 py-2 text-sm font-medium text-gray-700 hover:text-gray-900 hover:bg-gray-100 rounded-md transition-colors"
+              >
+                Mysteries
+              </Link>
+            </nav>
           </div>
         </div>
+      </header>
 
-        {/* Document Upload */}
-        <div className="border-t border-zinc-200 pt-6">
-          <h2 className="text-sm font-semibold text-zinc-700 mb-3">
-            Document Upload
-          </h2>
+      <div className="flex">
+        {/* Dark Sidebar */}
+        <aside className="w-64 min-h-screen bg-gray-900 text-gray-100">
+          <div className="p-6">
+            <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-4">
+              Navigation
+            </h2>
+            <nav className="space-y-2">
+              <Link
+                href="/"
+                className="block px-3 py-2 text-sm font-medium bg-gray-800 text-white rounded-md"
+              >
+                Dashboard
+              </Link>
+              <Link
+                href="/people"
+                className="block px-3 py-2 text-sm font-medium text-gray-300 hover:bg-gray-800 hover:text-white rounded-md transition-colors"
+              >
+                People
+              </Link>
+              <Link
+                href="/mysteries"
+                className="block px-3 py-2 text-sm font-medium text-gray-300 hover:bg-gray-800 hover:text-white rounded-md transition-colors"
+              >
+                Mysteries
+              </Link>
+            </nav>
+          </div>
+        </aside>
 
-          <div className="space-y-3">
-            <div>
-              <label className="block text-xs font-medium text-zinc-600 mb-1">
-                Individual Name
-              </label>
-              <input
-                type="text"
-                value={individualName}
-                onChange={(e) => setIndividualName(e.target.value)}
-                placeholder="e.g., John Johnson"
-                className="w-full px-3 py-2 text-sm border border-zinc-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
+        {/* Main Content */}
+        <main className="flex-1 p-8">
+          {/* Stats Row */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+            <div className="bg-white rounded-lg shadow p-6">
+              <div className="text-sm font-medium text-gray-500 mb-1">Total People</div>
+              <div className="text-3xl font-bold text-gray-900">{totalCount.toLocaleString()}</div>
             </div>
-
-            <div>
-              <label className="block text-xs font-medium text-zinc-600 mb-1">
-                Document Type
-              </label>
-              <input
-                type="text"
-                value={documentType}
-                onChange={(e) => setDocumentType(e.target.value)}
-                placeholder="e.g., Birth Certificate"
-                className="w-full px-3 py-2 text-sm border border-zinc-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
+            <div className="bg-white rounded-lg shadow p-6">
+              <div className="text-sm font-medium text-gray-500 mb-1">Confirmed</div>
+              <div className="text-3xl font-bold text-green-600">{confirmedCount.toLocaleString()}</div>
             </div>
-
-            <div>
-              <label className="block text-xs font-medium text-zinc-600 mb-1">
-                Notes
-              </label>
-              <textarea
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                placeholder="Additional context..."
-                rows={3}
-                className="w-full px-3 py-2 text-sm border border-zinc-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-zinc-600 mb-1">
-                Upload File
-              </label>
-              <input
-                type="file"
-                onChange={handleFileUpload}
-                className="w-full text-sm text-zinc-600 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
-              />
-              {uploadedFile && (
-                <p className="text-xs text-zinc-500 mt-1">
-                  {uploadedFile.name}
-                </p>
-              )}
+            <div className="bg-white rounded-lg shadow p-6">
+              <div className="text-sm font-medium text-gray-500 mb-1">Needs Review</div>
+              <div className="text-3xl font-bold text-orange-600">{needsReviewCount.toLocaleString()}</div>
             </div>
           </div>
-        </div>
-      </div>
 
-      {/* Right Panel - Chat */}
-      <div className="flex-1 flex flex-col">
-        {/* Messages Area */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-4">
-          {messages.length === 0 && (
-            <div className="flex items-center justify-center h-full text-zinc-400">
-              <p>Start a conversation about your genealogy research</p>
-            </div>
-          )}
-
-          {messages.map((message, index) => (
-            <div
-              key={index}
-              className={`flex ${
-                message.role === 'user' ? 'justify-end' : 'justify-start'
-              }`}
-            >
-              <div
-                className={`max-w-2xl px-4 py-3 rounded-lg ${
-                  message.role === 'user'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-white text-zinc-900 border border-zinc-200'
-                }`}
-              >
-                <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            {/* Active Mysteries Panel */}
+            <div className="bg-white rounded-lg shadow">
+              <div className="px-6 py-4 border-b border-gray-200">
+                <h2 className="text-lg font-semibold text-gray-900">Active Mysteries</h2>
               </div>
-            </div>
-          ))}
-
-          {isLoading && (
-            <div className="flex justify-start">
-              <div className="max-w-2xl px-4 py-3 rounded-lg bg-white text-zinc-900 border border-zinc-200">
-                <p className="text-sm text-zinc-500">Thinking...</p>
-              </div>
-            </div>
-          )}
-
-          {/* Gemini Deep Research Results */}
-          {geminiResult && (
-            <div className="border-t-2 border-blue-200 pt-4 mt-4">
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                <h3 className="text-sm font-semibold text-blue-900 mb-2">
-                  Deep Research Results
-                </h3>
-                <p className="text-sm text-zinc-800 whitespace-pre-wrap mb-3">
-                  {geminiResult.text}
-                </p>
-                {geminiResult.sources && geminiResult.sources.length > 0 && (
-                  <div className="border-t border-blue-200 pt-3 mt-3">
-                    <p className="text-xs font-semibold text-blue-900 mb-2">
-                      Sources:
-                    </p>
-                    <ul className="space-y-1">
-                      {geminiResult.sources.map((source, idx) => (
-                        <li key={idx}>
-                          <a
-                            href={source.uri}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-xs text-blue-700 hover:underline"
-                          >
-                            {source.title}
-                          </a>
-                        </li>
-                      ))}
-                    </ul>
+              <div className="p-6">
+                {!mysteriesData ? (
+                  <div className="text-center py-8 text-gray-500">
+                    <p className="text-sm">No mysteries yet</p>
+                    <Link
+                      href="/mysteries"
+                      className="mt-2 inline-block text-sm text-blue-600 hover:text-blue-700"
+                    >
+                      Create your first mystery →
+                    </Link>
+                  </div>
+                ) : mysteriesData.length === 0 ? (
+                  <div className="text-center py-8 text-gray-500">
+                    <p className="text-sm">No active mysteries</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {mysteriesData.map((mystery: any) => (
+                      <Link
+                        key={mystery.id}
+                        href={`/mysteries/${mystery.id}`}
+                        className="block p-4 border border-gray-200 rounded-md hover:border-gray-300 hover:shadow-sm transition-all"
+                      >
+                        <div className="font-medium text-gray-900">{mystery.title}</div>
+                        {mystery.core_question && (
+                          <div className="text-sm text-gray-600 mt-1">{mystery.core_question}</div>
+                        )}
+                      </Link>
+                    ))}
                   </div>
                 )}
               </div>
             </div>
-          )}
 
-          {isGeminiLoading && (
-            <div className="border-t-2 border-blue-200 pt-4 mt-4">
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                <p className="text-sm text-blue-900">
-                  Conducting deep research...
-                </p>
+            {/* Recent People Panel */}
+            <div className="bg-white rounded-lg shadow">
+              <div className="px-6 py-4 border-b border-gray-200">
+                <h2 className="text-lg font-semibold text-gray-900">Recently Added</h2>
+              </div>
+              <div className="p-6">
+                {!recentPeople || recentPeople.length === 0 ? (
+                  <div className="text-center py-8 text-gray-500">
+                    <p className="text-sm">No people found</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {recentPeople.map((person) => (
+                      <Link
+                        key={person.id}
+                        href={`/people/${person.id}`}
+                        className="block p-3 border border-gray-200 rounded-md hover:border-gray-300 hover:shadow-sm transition-all"
+                      >
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1">
+                            <div className="font-medium text-gray-900">
+                              {person.given_name} {person.surname}
+                            </div>
+                            <div className="text-sm text-gray-600 mt-0.5">
+                              {person.birth_year && person.death_year
+                                ? `${person.birth_year} - ${person.death_year}`
+                                : person.birth_year
+                                ? `b. ${person.birth_year}`
+                                : person.death_year
+                                ? `d. ${person.death_year}`
+                                : 'Dates unknown'}
+                            </div>
+                          </div>
+                          <ConfidenceBadge confidence={person.confidence} />
+                        </div>
+                      </Link>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
-          )}
-        </div>
-
-        {/* Input Area */}
-        <div className="border-t border-zinc-200 p-4 bg-white">
-          <div className="flex gap-2 mb-2">
-            <input
-              type="text"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSendMessage();
-                }
-              }}
-              placeholder="Ask about genealogy research..."
-              className="flex-1 px-4 py-3 border border-zinc-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              disabled={isLoading || isGeminiLoading}
-            />
-            <button
-              onClick={() => handleSendMessage()}
-              disabled={isLoading || isGeminiLoading || !input.trim()}
-              className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-zinc-300 disabled:cursor-not-allowed transition-colors"
-            >
-              Send
-            </button>
           </div>
-          <button
-            onClick={handleDeepResearch}
-            disabled={isLoading || isGeminiLoading || !input.trim()}
-            className="w-full px-4 py-2 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 disabled:bg-zinc-300 disabled:cursor-not-allowed transition-colors"
-          >
-            Deep Research (Gemini + Google Search)
-          </button>
-        </div>
+        </main>
       </div>
     </div>
-  );
+  )
 }
