@@ -37,7 +37,7 @@ function PedigreeFlowInner({ initialFocusId }: PedigreeViewProps) {
   const { fitView } = useReactFlow()
   const [focusPerson, setFocusPerson] = useState<Person | null>(null)
   const [allPeople, setAllPeople] = useState<Map<string, Person>>(new Map())
-  const [maxGenerations, setMaxGenerations] = useState(4)
+  const [maxGenerations, setMaxGenerations] = useState(5)
   const [isLoading, setIsLoading] = useState(true)
 
   // Fetch all people upfront
@@ -158,6 +158,9 @@ function PedigreeFlowInner({ initialFocusId }: PedigreeViewProps) {
       3: 610,
       4: 890,
       5: 1170,
+      6: 1450,
+      7: 1730,
+      8: 2010,
     }
 
     // Convert to React Flow nodes
@@ -188,7 +191,7 @@ function PedigreeFlowInner({ initialFocusId }: PedigreeViewProps) {
         },
       })
 
-      // Create edge to father
+      // Create edge to father (if father is in the tree)
       if (treeNode.father) {
         edgesList.push({
           id: `${treeNode.person.id}-father`,
@@ -197,36 +200,9 @@ function PedigreeFlowInner({ initialFocusId }: PedigreeViewProps) {
           type: 'smoothstep',
           style: { stroke: '#D3D1C7', strokeWidth: 1 },
         })
-      } else if (treeNode.person.father_id) {
-        // Father exists but not in our data - create placeholder
-        const placeholderId = `placeholder-father-${treeNode.person.id}`
-        nodesList.push({
-          id: placeholderId,
-          type: 'ancestryPerson',
-          position: { x: generationX[treeNode.generation + 1] || 890, y: treeNode.y - 60 },
-          data: {
-            person: {
-              id: placeholderId,
-              given_name: 'Unknown',
-              surname: 'Father',
-              confidence: 'hypothetical',
-            },
-            isFocus: false,
-            hasExpandArrow: false,
-            onExpand: () => {},
-            onClick: () => {},
-          },
-        })
-        edgesList.push({
-          id: `${treeNode.person.id}-father-placeholder`,
-          source: treeNode.person.id,
-          target: placeholderId,
-          type: 'smoothstep',
-          style: { stroke: '#D3D1C7', strokeWidth: 1, strokeDasharray: '5,5' },
-        })
       }
 
-      // Create edge to mother
+      // Create edge to mother (if mother is in the tree)
       if (treeNode.mother) {
         edgesList.push({
           id: `${treeNode.person.id}-mother`,
@@ -234,33 +210,6 @@ function PedigreeFlowInner({ initialFocusId }: PedigreeViewProps) {
           target: treeNode.mother.person.id,
           type: 'smoothstep',
           style: { stroke: '#D3D1C7', strokeWidth: 1 },
-        })
-      } else if (treeNode.person.mother_id) {
-        // Mother exists but not in our data - create placeholder
-        const placeholderId = `placeholder-mother-${treeNode.person.id}`
-        nodesList.push({
-          id: placeholderId,
-          type: 'ancestryPerson',
-          position: { x: generationX[treeNode.generation + 1] || 890, y: treeNode.y + 60 },
-          data: {
-            person: {
-              id: placeholderId,
-              given_name: 'Unknown',
-              surname: 'Mother',
-              confidence: 'hypothetical',
-            },
-            isFocus: false,
-            hasExpandArrow: false,
-            onExpand: () => {},
-            onClick: () => {},
-          },
-        })
-        edgesList.push({
-          id: `${treeNode.person.id}-mother-placeholder`,
-          source: treeNode.person.id,
-          target: placeholderId,
-          type: 'smoothstep',
-          style: { stroke: '#D3D1C7', strokeWidth: 1, strokeDasharray: '5,5' },
         })
       }
     })
@@ -292,7 +241,7 @@ function PedigreeFlowInner({ initialFocusId }: PedigreeViewProps) {
         </div>
 
         <div className="flex gap-2">
-          {[3, 4, 5].map(gen => (
+          {[3, 4, 5, 6, 7, 8].map(gen => (
             <button
               key={gen}
               onClick={() => setMaxGenerations(gen)}
