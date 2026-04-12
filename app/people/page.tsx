@@ -2,8 +2,10 @@
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { Person } from '@/lib/types'
+import PersonForm from '@/app/components/PersonForm'
 
 function ConfidenceBadge({ confidence }: { confidence?: string }) {
   const styles = {
@@ -24,6 +26,7 @@ function ConfidenceBadge({ confidence }: { confidence?: string }) {
 }
 
 export default function PeoplePage() {
+  const router = useRouter()
   const [people, setPeople] = useState<Person[]>([])
   const [filteredPeople, setFilteredPeople] = useState<Person[]>([])
   const [totalCount, setTotalCount] = useState(0)
@@ -32,6 +35,8 @@ export default function PeoplePage() {
   const [brickWallFilter, setBrickWallFilter] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
   const [isLoading, setIsLoading] = useState(true)
+  const [showNewPersonModal, setShowNewPersonModal] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
 
   const itemsPerPage = 50
 
@@ -91,6 +96,27 @@ export default function PeoplePage() {
     setCurrentPage(1)
   }
 
+  async function handleCreatePerson(data: any) {
+    setIsSubmitting(true)
+    try {
+      const response = await fetch('/api/people', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      })
+
+      const result = await response.json()
+      if (result.success && result.person) {
+        setShowNewPersonModal(false)
+        router.push(`/people/${result.person.id}`)
+      }
+    } catch (error) {
+      console.error('Error creating person:', error)
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
   const totalPages = Math.ceil(filteredPeople.length / itemsPerPage)
   const startIndex = (currentPage - 1) * itemsPerPage
   const endIndex = startIndex + itemsPerPage
@@ -100,9 +126,35 @@ export default function PeoplePage() {
     <div className="p-6">
       {/* Header */}
       <div className="mb-6">
-        <h1 className="text-[20px] font-semibold mb-1">People</h1>
+        <div className="flex items-center justify-between mb-1">
+          <h1 className="text-[20px] font-semibold">People</h1>
+          <button
+            onClick={() => setShowNewPersonModal(true)}
+            className="px-3 py-1.5 bg-[#EF9F27] text-white text-[13px] font-medium rounded hover:bg-[#D88E1F] transition-colors"
+          >
+            New Person
+          </button>
+        </div>
         <p className="text-[13px] text-gray-600">{totalCount.toLocaleString()} individuals in database</p>
       </div>
+
+      {/* New Person Modal */}
+      {showNewPersonModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-[#FDFCFA] rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto border border-[#D3D1C7]">
+            <div className="p-6 border-b border-[#D3D1C7]">
+              <h2 className="text-[18px] font-semibold">New Person</h2>
+            </div>
+            <div className="p-6">
+              <PersonForm
+                onSubmit={handleCreatePerson}
+                onCancel={() => setShowNewPersonModal(false)}
+                isLoading={isSubmitting}
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="bg-[#FDFCFA] border border-[#D3D1C7] rounded-lg p-4 mb-4">

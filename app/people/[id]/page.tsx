@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { createServerSupabaseClient } from '@/lib/supabase-server'
 import { Person } from '@/lib/types'
+import { EditFactsButton, AddRelationshipButton } from './ActionButtons'
 
 function getInitials(person: Person): string {
   const first = person.given_name?.charAt(0) || ''
@@ -312,61 +313,73 @@ export default async function PersonPage({ params }: PageProps) {
           <h2 className="text-[15px] font-semibold mb-3">Family</h2>
 
           {/* Parents */}
-          {(father || mother) && (
-            <>
-              <div className="mb-2">
-                <div className="text-[11px] font-medium text-gray-500 uppercase tracking-wider mb-2">Parents</div>
-                <div className="grid grid-cols-2 gap-2">
-                  {father && <PersonCard person={father} />}
-                  {mother && <PersonCard person={mother} />}
-                </div>
+          <div className="mb-2">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Parents</div>
+              <AddRelationshipButton type="parent" personId={id} />
+            </div>
+            {(father || mother) ? (
+              <div className="grid grid-cols-2 gap-2">
+                {father && <PersonCard person={father} />}
+                {mother && <PersonCard person={mother} />}
               </div>
-              <div className="h-4 w-px bg-[#D3D1C7] mx-auto"></div>
-            </>
-          )}
+            ) : (
+              <p className="text-[11px] text-gray-400 italic">No parents recorded</p>
+            )}
+          </div>
+          <div className="h-4 w-px bg-[#D3D1C7] mx-auto"></div>
 
           {/* Spouses */}
-          {spouses.length > 0 && (
-            <>
-              <div className="mb-2">
-                <div className="text-[11px] font-medium text-gray-500 uppercase tracking-wider mb-2">Spouses</div>
-                <div className="grid grid-cols-2 gap-2">
-                  {spouses.map(spouse => (
-                    <PersonCard key={spouse.id} person={spouse} />
-                  ))}
-                </div>
+          <div className="mb-2">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Spouses</div>
+              <AddRelationshipButton type="spouse" personId={id} />
+            </div>
+            {spouses.length > 0 ? (
+              <div className="grid grid-cols-2 gap-2">
+                {spouses.map(spouse => (
+                  <PersonCard key={spouse.id} person={spouse} />
+                ))}
               </div>
-              <div className="h-4 w-px bg-[#D3D1C7] mx-auto"></div>
-            </>
-          )}
+            ) : (
+              <p className="text-[11px] text-gray-400 italic">No spouses recorded</p>
+            )}
+          </div>
+          <div className="h-4 w-px bg-[#D3D1C7] mx-auto"></div>
 
           {/* Children */}
-          {children.length > 0 && (
-            <div>
-              <div className="text-[11px] font-medium text-gray-500 uppercase tracking-wider mb-2">Children</div>
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Children</div>
+              <AddRelationshipButton type="child" personId={id} />
+            </div>
+            {children.length > 0 ? (
               <div className="grid grid-cols-2 gap-2">
                 {children.map(child => (
                   <PersonCard key={child.id} person={child} />
                 ))}
               </div>
-            </div>
-          )}
+            ) : (
+              <p className="text-[11px] text-gray-400 italic">No children recorded</p>
+            )}
+          </div>
 
           {/* Siblings */}
-          {siblings.length > 0 && (
-            <div className="mt-4">
-              <div className="text-[11px] font-medium text-gray-500 uppercase tracking-wider mb-2">Siblings</div>
+          <div className="mt-4">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Siblings</div>
+              <AddRelationshipButton type="sibling" personId={id} />
+            </div>
+            {siblings.length > 0 ? (
               <div className="grid grid-cols-2 gap-2">
                 {siblings.map(sibling => (
                   <PersonCard key={sibling.id} person={sibling} />
                 ))}
               </div>
-            </div>
-          )}
-
-          {!father && !mother && spouses.length === 0 && children.length === 0 && siblings.length === 0 && (
-            <p className="text-[13px] text-gray-400 italic">No family relationships recorded</p>
-          )}
+            ) : (
+              <p className="text-[11px] text-gray-400 italic">No siblings recorded</p>
+            )}
+          </div>
         </div>
 
         {/* Connected Mysteries */}
@@ -452,9 +465,7 @@ export default async function PersonPage({ params }: PageProps) {
               <button className="w-full px-3 py-2 bg-white border border-[#D3D1C7] rounded text-[11px] font-medium hover:border-[#EF9F27] transition-colors">
                 Upload Document
               </button>
-              <button className="w-full px-3 py-2 bg-white border border-[#D3D1C7] rounded text-[11px] font-medium hover:border-[#EF9F27] transition-colors">
-                Edit Facts
-              </button>
+              <EditFactsButton person={person} personId={id} />
             </div>
           </div>
 
