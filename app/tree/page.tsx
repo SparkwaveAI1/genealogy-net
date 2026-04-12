@@ -1,12 +1,16 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Suspense } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { Person } from '@/lib/types'
 import PedigreeView from './PedigreeView'
 import AhnentafelView from './AhnentafelView'
 
-export default function TreePage() {
+function TreePageContent() {
+  const searchParams = useSearchParams()
+  const focusId = searchParams.get('focus')
+
   const [activeTab, setActiveTab] = useState<'pedigree' | 'ahnentafel'>('pedigree')
   const [people, setPeople] = useState<Person[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -66,16 +70,28 @@ export default function TreePage() {
 
       {/* Content */}
       <div className="flex-1 overflow-hidden">
-        {isLoading ? (
+        {activeTab === 'pedigree' ? (
+          <PedigreeView initialFocusId={focusId || undefined} />
+        ) : isLoading ? (
           <div className="flex items-center justify-center h-full">
             <div className="text-[13px] text-gray-500">Loading family tree...</div>
           </div>
-        ) : activeTab === 'pedigree' ? (
-          <PedigreeView people={people} />
         ) : (
           <AhnentafelView people={people} />
         )}
       </div>
     </div>
+  )
+}
+
+export default function TreePage() {
+  return (
+    <Suspense fallback={
+      <div className="h-screen flex items-center justify-center">
+        <div className="text-[13px] text-gray-500">Loading...</div>
+      </div>
+    }>
+      <TreePageContent />
+    </Suspense>
   )
 }
