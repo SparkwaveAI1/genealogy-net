@@ -87,7 +87,7 @@ export interface FamilyRelationship {
   id: string
   person_id: string
   related_person_id: string
-  relationship_type: 'parent' | 'child' | 'spouse' | 'sibling'
+  relationship_type: 'parent' | 'child' | 'spouse' | 'sibling' | 'father' | 'mother'
   notes?: string
   created_at?: string
   updated_at?: string

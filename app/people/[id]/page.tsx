@@ -270,32 +270,32 @@ export default async function PersonPage({ params }: PageProps) {
             )}
 
             {/* Father */}
-            {father && (
+            {father !== null && (
               <div className="flex items-start justify-between">
                 <div className="flex-1">
                   <div className="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Father</div>
                   <div className="text-[13px] text-gray-900 mt-1">
-                    <Link href={`/people/${father.id}`} className="text-[#EF9F27] hover:underline">
-                      {father.given_name} {father.surname}
+                    <Link href={`/people/${(father as Person).id}`} className="text-[#EF9F27] hover:underline">
+                      {(father as Person).given_name} {(father as Person).surname}
                     </Link>
                   </div>
                 </div>
-                <ConfidenceBadge confidence={father.confidence} size="small" />
+                <ConfidenceBadge confidence={(father as Person).confidence} size="small" />
               </div>
             )}
 
             {/* Mother */}
-            {mother && (
+            {mother !== null && (
               <div className="flex items-start justify-between">
                 <div className="flex-1">
                   <div className="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Mother</div>
                   <div className="text-[13px] text-gray-900 mt-1">
-                    <Link href={`/people/${mother.id}`} className="text-[#EF9F27] hover:underline">
-                      {mother.given_name} {mother.surname}
+                    <Link href={`/people/${(mother as Person).id}`} className="text-[#EF9F27] hover:underline">
+                      {(mother as Person).given_name} {(mother as Person).surname}
                     </Link>
                   </div>
                 </div>
-                <ConfidenceBadge confidence={mother.confidence} size="small" />
+                <ConfidenceBadge confidence={(mother as Person).confidence} size="small" />
               </div>
             )}
           </div>
