@@ -43,6 +43,7 @@ export default function Dashboard() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [uploadProgress, setUploadProgress] = useState(false)
   const [uploadResult, setUploadResult] = useState<AnalysisResult | null>(null)
+  const [uploadError, setUploadError] = useState<string | null>(null)
   const [individualContext, setIndividualContext] = useState('')
   const [documentType, setDocumentType] = useState('')
   const [processingInstructions, setProcessingInstructions] = useState('')
@@ -170,6 +171,7 @@ export default function Dashboard() {
 
     setUploadProgress(true)
     setUploadResult(null)
+    setUploadError(null)
 
     try {
       const formData = new FormData()
@@ -187,13 +189,21 @@ export default function Dashboard() {
       })
 
       const data = await response.json()
+
+      if (!response.ok) {
+        setUploadError(data.error || `Upload failed with status ${response.status}`)
+        return
+      }
+
       if (data.success && data.analysis) {
         setUploadResult(data.analysis)
       } else {
-        console.error('Upload error:', data.error)
+        setUploadError(data.error || 'Unknown error occurred')
+        console.error('Upload error:', data)
       }
     } catch (error) {
       console.error('Error uploading document:', error)
+      setUploadError(error instanceof Error ? error.message : 'Network error occurred')
     } finally {
       setUploadProgress(false)
     }
@@ -359,6 +369,14 @@ export default function Dashboard() {
             >
               {uploadProgress ? 'Analyzing...' : 'Analyze with Hermes'}
             </button>
+
+            {/* Error Display */}
+            {uploadError && (
+              <div className="mt-3 p-3 bg-[#FCEBEB] border border-[#791F1F] rounded">
+                <div className="text-[11px] text-[#791F1F] font-medium mb-1">Upload Error</div>
+                <div className="text-[11px] text-[#791F1F]">{uploadError}</div>
+              </div>
+            )}
 
             {/* Analysis Results */}
             {uploadResult && (

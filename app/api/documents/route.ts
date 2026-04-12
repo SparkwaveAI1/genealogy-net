@@ -28,6 +28,8 @@ Return your analysis as a JSON object with these fields:
 
 export async function POST(req: NextRequest) {
   try {
+    console.log('Document upload started');
+
     const formData = await req.formData();
     const file = formData.get('file') as File;
     const individual_context = formData.get('individual_context') as string;
@@ -35,10 +37,20 @@ export async function POST(req: NextRequest) {
     const processing_instructions = formData.get('processing_instructions') as string;
     const mystery_id = formData.get('mystery_id') as string;
 
+    console.log('File received:', file?.name, file?.type, file?.size);
+
     if (!file) {
       return NextResponse.json(
         { error: 'No file provided' },
         { status: 400 }
+      );
+    }
+
+    if (!process.env.ANTHROPIC_API_KEY) {
+      console.error('ANTHROPIC_API_KEY not set');
+      return NextResponse.json(
+        { error: 'API key not configured' },
+        { status: 500 }
       );
     }
 
@@ -140,6 +152,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Send to Claude API
+    console.log('Sending to Claude API...');
     const response = await anthropic.messages.create({
       model: 'claude-sonnet-4-6',
       max_tokens: 2000,
@@ -152,9 +165,12 @@ export async function POST(req: NextRequest) {
       ],
     });
 
+    console.log('Claude API response received');
+
     // Extract text content from response
     const textContent = response.content.find(block => block.type === 'text');
     let analysisText = textContent && 'text' in textContent ? textContent.text : '';
+    console.log('Analysis text length:', analysisText.length);
 
     // Try to parse JSON from the response
     let analysis;
@@ -211,6 +227,7 @@ export async function POST(req: NextRequest) {
       // For now, just return the mystery_id in the response
     }
 
+    console.log('Returning success response');
     return NextResponse.json({
       success: true,
       analysis,
@@ -220,8 +237,13 @@ export async function POST(req: NextRequest) {
     });
   } catch (error: any) {
     console.error('Document processing error:', error);
+    console.error('Error stack:', error.stack);
     return NextResponse.json(
-      { error: error.message || 'An error occurred processing the document' },
+      {
+        success: false,
+        error: error.message || 'An error occurred processing the document',
+        details: error.toString()
+      },
       { status: 500 }
     );
   }
