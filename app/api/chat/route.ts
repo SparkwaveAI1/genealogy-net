@@ -74,7 +74,7 @@ export async function POST(req: NextRequest) {
   }
   try {
     const body = await req.json();
-    const { messages, deep } = body;
+    const { messages, deep, mode, mystery_context, location_context } = body;
 
     if (!messages || !Array.isArray(messages)) {
       return NextResponse.json(
@@ -83,17 +83,73 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Build system prompt
+    let systemPrompt = GENEALOGY_SYSTEM_PROMPT;
+
+    // Briefing mode: add database stats
+    if (mode === 'briefing') {
+      try {
+        const { supabase } = await import('@/lib/supabase');
+
+        const { count: peopleCount } = await supabase
+          .from('people')
+          .select('*', { count: 'exact', head: true });
+
+        const { count: mysteriesCount } = await supabase
+          .from('mysteries')
+          .select('*', { count: 'exact', head: true });
+
+        const { count: needsReviewCount } = await supabase
+          .from('people')
+          .select('*', { count: 'exact', head: true })
+          .eq('needs_review', true);
+
+        systemPrompt = `You are Hermes, the genealogy research AI assistant.
+
+DATABASE STATS:
+- People in database: ${peopleCount || 0}
+- Active mysteries: ${mysteriesCount || 0}
+- People needing review: ${needsReviewCount || 0}
+
+Compose a brief morning research briefing highlighting any important items that need attention and suggesting productive research tasks for today. Be concise and actionable.
+
+` + GENEALOGY_SYSTEM_PROMPT;
+      } catch (error) {
+        console.error('Error fetching briefing data:', error);
+      }
+    }
+
+    // Add mystery context if provided
+    if (mystery_context) {
+      systemPrompt = `MYSTERY CONTEXT:
+${JSON.stringify(mystery_context, null, 2)}
+
+` + systemPrompt;
+    }
+
+    // Add location context if provided
+    if (location_context) {
+      systemPrompt = `LOCATION CONTEXT:
+${JSON.stringify(location_context, null, 2)}
+
+` + systemPrompt;
+    }
+
     // Select model based on deep parameter
     const model = deep === true ? 'claude-sonnet-4-6' : 'claude-haiku-4-5';
 
     const response = await anthropic.messages.create({
       model,
       max_tokens: 1000,
-      system: GENEALOGY_SYSTEM_PROMPT,
+      system: systemPrompt,
       messages,
     });
 
-    return NextResponse.json(response);
+    // Extract text content from response
+    const textContent = response.content.find(block => block.type === 'text');
+    const message = textContent && 'text' in textContent ? textContent.text : '';
+
+    return NextResponse.json({ message, full_response: response });
   } catch (error: any) {
     console.error('Anthropic API error:', error);
     return NextResponse.json(
