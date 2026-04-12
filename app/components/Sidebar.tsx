@@ -37,6 +37,7 @@ export default function Sidebar() {
             <NavLink href="/" label="Dashboard" />
             <NavLink href="/people" label="People" />
             <NavLink href="/mysteries" label="Mysteries" />
+            <NavLink href="/tree" label="Tree" />
           </div>
         </div>
 
