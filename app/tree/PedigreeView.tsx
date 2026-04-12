@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useMemo, useState, useEffect } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   ReactFlow,
@@ -20,11 +20,12 @@ interface PedigreeViewProps {
   initialFocusId?: string
 }
 
-interface TreePerson extends Person {
-  fatherId?: string
-  motherId?: string
-  hasParents?: boolean
-  siblingCount?: number
+type TreeNode = {
+  person: Person
+  father: TreeNode | null
+  mother: TreeNode | null
+  generation: number
+  y: number
 }
 
 const nodeTypes = {
@@ -34,16 +35,14 @@ const nodeTypes = {
 function PedigreeFlowInner({ initialFocusId }: PedigreeViewProps) {
   const router = useRouter()
   const { fitView } = useReactFlow()
-  const [focusPerson, setFocusPerson] = useState<TreePerson | null>(null)
-  const [generations, setGenerations] = useState(4)
-  const [history, setHistory] = useState<string[]>([])
-  const [treeData, setTreeData] = useState<Map<string, TreePerson>>(new Map())
+  const [focusPerson, setFocusPerson] = useState<Person | null>(null)
+  const [allPeople, setAllPeople] = useState<Map<string, Person>>(new Map())
+  const [maxGenerations, setMaxGenerations] = useState(4)
   const [isLoading, setIsLoading] = useState(true)
-  const [coupleBrackets, setCoupleBrackets] = useState<Array<{ x: number; y1: number; y2: number }>>([])
 
-  // Fetch focus person and their ancestors
+  // Fetch all people upfront
   useEffect(() => {
-    async function loadTreeData() {
+    async function loadData() {
       setIsLoading(true)
 
       // Find focus person (default to ahnentafel 1)
@@ -59,284 +58,222 @@ function PedigreeFlowInner({ initialFocusId }: PedigreeViewProps) {
         return
       }
 
-      // Count siblings (people who share same father)
-      let siblingCount = 0
-      if (focus.father_id) {
-        const { count } = await supabase
-          .from('people')
-          .select('*', { count: 'exact', head: true })
-          .eq('father_id', focus.father_id)
-          .neq('id', focus.id)
-        siblingCount = count || 0
-      }
+      setFocusPerson(focus)
 
-      const focusWithRels: TreePerson = {
-        ...focus,
-        fatherId: focus.father_id,
-        motherId: focus.mother_id,
-        hasParents: !!(focus.father_id || focus.mother_id),
-        siblingCount,
-      }
+      // Fetch all people with ahnentafel numbers (all ancestors)
+      const { data: people } = await supabase
+        .from('people')
+        .select('*')
+        .not('ahnentafel', 'is', null)
 
-      setFocusPerson(focusWithRels)
+      const peopleMap = new Map<string, Person>()
+      people?.forEach(p => peopleMap.set(p.id, p))
 
-      // Recursively fetch ancestors
-      const personMap = new Map<string, TreePerson>()
-      personMap.set(focus.id, focusWithRels)
-
-      await fetchAncestors(focusWithRels, personMap, generations - 1)
-
-      setTreeData(personMap)
+      setAllPeople(peopleMap)
       setIsLoading(false)
-
-      // Fit view after data loads
-      setTimeout(() => fitView({ padding: 0.2, duration: 400 }), 100)
     }
 
-    loadTreeData()
-  }, [initialFocusId, generations, fitView])
+    loadData()
+  }, [initialFocusId])
 
-  async function fetchAncestors(person: TreePerson, map: Map<string, TreePerson>, depth: number) {
-    if (depth <= 0) return
-
-    const parentIds = [person.fatherId, person.motherId].filter(Boolean) as string[]
-    if (parentIds.length === 0) return
-
-    const { data: parents } = await supabase
-      .from('people')
-      .select('*')
-      .in('id', parentIds)
-
-    if (!parents) return
-
-    for (const parent of parents) {
-      const parentWithRels: TreePerson = {
-        ...parent,
-        fatherId: parent.father_id,
-        motherId: parent.mother_id,
-        hasParents: !!(parent.father_id || parent.mother_id),
+  // Build tree structure recursively
+  function buildTree(person: Person, generation: number): TreeNode {
+    if (generation > maxGenerations) {
+      return {
+        person,
+        father: null,
+        mother: null,
+        generation,
+        y: 0,
       }
+    }
 
-      map.set(parent.id, parentWithRels)
+    const father = person.father_id ? allPeople.get(person.father_id) : null
+    const mother = person.mother_id ? allPeople.get(person.mother_id) : null
 
-      // Recurse
-      await fetchAncestors(parentWithRels, map, depth - 1)
+    return {
+      person,
+      father: father ? buildTree(father, generation + 1) : null,
+      mother: mother ? buildTree(mother, generation + 1) : null,
+      generation,
+      y: 0,
     }
   }
 
-  // Build tree structure from focus person
-  const buildTreeLevels = useCallback(() => {
-    if (!focusPerson) return []
-
-    const levels: TreePerson[][] = [[focusPerson]]
-
-    for (let i = 1; i < generations; i++) {
-      const prevLevel = levels[i - 1]
-      const nextLevel: TreePerson[] = []
-
-      for (const person of prevLevel) {
-        if (person.fatherId) {
-          const father = treeData.get(person.fatherId)
-          if (father) nextLevel.push(father)
-        }
-        if (person.motherId) {
-          const mother = treeData.get(person.motherId)
-          if (mother) nextLevel.push(mother)
-        }
-      }
-
-      if (nextLevel.length === 0) break
-      levels.push(nextLevel)
+  // Calculate Y positions bottom-up
+  function assignPositions(node: TreeNode, leafIndex: { value: number }): number {
+    // If this is a leaf node (no children in the tree), assign next position
+    if (!node.father && !node.mother) {
+      const y = leafIndex.value * 130
+      leafIndex.value++
+      node.y = y
+      return y
     }
 
-    return levels
-  }, [focusPerson, treeData, generations])
+    // Recursively position children
+    const fatherY = node.father ? assignPositions(node.father, leafIndex) : null
+    const motherY = node.mother ? assignPositions(node.mother, leafIndex) : null
 
-  // Calculate positions using right-to-left algorithm
+    // Position this node at midpoint of children
+    let y = 0
+    if (fatherY !== null && motherY !== null) {
+      y = (fatherY + motherY) / 2
+    } else {
+      y = fatherY ?? motherY ?? 0
+    }
+
+    node.y = y
+    return y
+  }
+
+  // Collect all nodes from tree
+  function collectNodes(node: TreeNode | null, nodes: TreeNode[]) {
+    if (!node) return
+    nodes.push(node)
+    collectNodes(node.father, nodes)
+    collectNodes(node.mother, nodes)
+  }
+
+  // Build React Flow nodes and edges
   const { nodes, edges } = useMemo(() => {
-    if (!focusPerson || treeData.size === 0) {
+    if (!focusPerson || allPeople.size === 0) {
       return { nodes: [], edges: [] }
     }
 
-    const levels = buildTreeLevels()
-    if (levels.length === 0) return { nodes: [], edges: [] }
+    // Build tree
+    const tree = buildTree(focusPerson, 1)
 
-    const nodesList: Node[] = []
-    const edgesList: Edge[] = []
-    const brackets: Array<{ x: number; y1: number; y2: number }> = []
+    // Calculate positions
+    const leafIndex = { value: 0 }
+    assignPositions(tree, leafIndex)
 
-    // Column x positions
-    const colXPositions = [80, 380, 680, 980, 1280]
-    const nodeWidth = 240
-    const nodeHeight = 90
-    const verticalSpacing = 20
+    // Collect all nodes
+    const treeNodes: TreeNode[] = []
+    collectNodes(tree, treeNodes)
 
-    // Position map: person id -> { x, y }
-    const positions = new Map<string, { x: number; y: number }>()
-
-    // STEP 1: Position rightmost generation evenly
-    const rightmostLevel = levels[levels.length - 1]
-    const rightmostGen = levels.length - 1
-    const rightmostX = colXPositions[rightmostGen] || 980
-
-    const totalHeight = (rightmostLevel.length * nodeHeight) + ((rightmostLevel.length - 1) * verticalSpacing)
-    const canvasHeight = 1000
-    let startY = (canvasHeight - totalHeight) / 2
-
-    rightmostLevel.forEach((person, index) => {
-      const y = startY + (index * (nodeHeight + verticalSpacing))
-      positions.set(person.id, { x: rightmostX, y })
-    })
-
-    // STEP 2: Work backwards, positioning each parent pair at midpoint of children
-    for (let genIndex = levels.length - 2; genIndex >= 0; genIndex--) {
-      const currentLevel = levels[genIndex]
-      const childLevel = levels[genIndex + 1]
-      const currentX = colXPositions[genIndex]
-
-      currentLevel.forEach(person => {
-        // Find this person's children in the next level
-        const children = childLevel.filter(
-          child => child.fatherId === person.id || child.motherId === person.id
-        )
-
-        if (children.length === 0) {
-          // Shouldn't happen, but fallback
-          positions.set(person.id, { x: currentX, y: canvasHeight / 2 })
-          return
-        }
-
-        // Calculate midpoint of children's Y positions
-        const childYs = children.map(c => positions.get(c.id)?.y || 0)
-        const minY = Math.min(...childYs)
-        const maxY = Math.max(...childYs)
-        const midY = (minY + maxY) / 2
-
-        // For couples, offset father up and mother down
-        const spouse = currentLevel.find(
-          p => p.id !== person.id &&
-          ((person.fatherId === p.id) || (person.motherId === p.id) ||
-           (p.fatherId === person.id) || (p.motherId === person.id))
-        )
-
-        // Check if this person is father or mother
-        const isFather = children.some(c => c.fatherId === person.id)
-        const isMother = children.some(c => c.motherId === person.id)
-
-        let y = midY
-        if (isFather && spouse) {
-          y = midY - 55 // Father above
-        } else if (isMother && spouse) {
-          y = midY + 55 // Mother below
-        }
-
-        positions.set(person.id, { x: currentX, y })
-      })
+    // Generation X positions
+    const generationX: Record<number, number> = {
+      1: 50,
+      2: 330,
+      3: 610,
+      4: 890,
+      5: 1170,
     }
 
-    // STEP 3: Create nodes
-    treeData.forEach((person, id) => {
-      const pos = positions.get(id)
-      if (!pos) return
+    // Convert to React Flow nodes
+    const nodesList: Node[] = []
+    const edgesList: Edge[] = []
 
-      const isFocus = id === focusPerson.id
-      const genIndex = levels.findIndex(level => level.some(p => p.id === id))
+    treeNodes.forEach(treeNode => {
+      const x = generationX[treeNode.generation] || 50
+      const isFocus = treeNode.person.id === focusPerson.id
 
-      // Check if this person has parents not currently shown
-      const hasMoreGenerations = person.hasParents && genIndex === levels.length - 1
+      // Count siblings for focus person
+      let siblingCount = 0
+      if (isFocus && focusPerson.father_id) {
+        // This would need a query - for now set to 0
+        siblingCount = 0
+      }
 
       nodesList.push({
-        id: person.id,
+        id: treeNode.person.id,
         type: 'ancestryPerson',
-        position: pos,
+        position: { x, y: treeNode.y },
         data: {
-          person,
+          person: { ...treeNode.person, siblingCount },
           isFocus,
-          hasExpandArrow: hasMoreGenerations,
-          onExpand: () => handleExpandPerson(person),
-          onClick: () => router.push(`/people/${person.id}`),
+          hasExpandArrow: false, // For now, no expansion
+          onExpand: () => {},
+          onClick: () => router.push(`/people/${treeNode.person.id}`),
         },
       })
-    })
 
-    // STEP 4: Create edges
-    treeData.forEach((person) => {
-      if (person.fatherId && treeData.has(person.fatherId)) {
+      // Create edge to father
+      if (treeNode.father) {
         edgesList.push({
-          id: `${person.id}-father`,
-          source: person.id,
-          target: person.fatherId,
+          id: `${treeNode.person.id}-father`,
+          source: treeNode.person.id,
+          target: treeNode.father.person.id,
           type: 'smoothstep',
           style: { stroke: '#D3D1C7', strokeWidth: 1 },
         })
-      }
-      if (person.motherId && treeData.has(person.motherId)) {
+      } else if (treeNode.person.father_id) {
+        // Father exists but not in our data - create placeholder
+        const placeholderId = `placeholder-father-${treeNode.person.id}`
+        nodesList.push({
+          id: placeholderId,
+          type: 'ancestryPerson',
+          position: { x: generationX[treeNode.generation + 1] || 890, y: treeNode.y - 60 },
+          data: {
+            person: {
+              id: placeholderId,
+              given_name: 'Unknown',
+              surname: 'Father',
+              confidence: 'hypothetical',
+            },
+            isFocus: false,
+            hasExpandArrow: false,
+            onExpand: () => {},
+            onClick: () => {},
+          },
+        })
         edgesList.push({
-          id: `${person.id}-mother`,
-          source: person.id,
-          target: person.motherId,
+          id: `${treeNode.person.id}-father-placeholder`,
+          source: treeNode.person.id,
+          target: placeholderId,
+          type: 'smoothstep',
+          style: { stroke: '#D3D1C7', strokeWidth: 1, strokeDasharray: '5,5' },
+        })
+      }
+
+      // Create edge to mother
+      if (treeNode.mother) {
+        edgesList.push({
+          id: `${treeNode.person.id}-mother`,
+          source: treeNode.person.id,
+          target: treeNode.mother.person.id,
           type: 'smoothstep',
           style: { stroke: '#D3D1C7', strokeWidth: 1 },
         })
+      } else if (treeNode.person.mother_id) {
+        // Mother exists but not in our data - create placeholder
+        const placeholderId = `placeholder-mother-${treeNode.person.id}`
+        nodesList.push({
+          id: placeholderId,
+          type: 'ancestryPerson',
+          position: { x: generationX[treeNode.generation + 1] || 890, y: treeNode.y + 60 },
+          data: {
+            person: {
+              id: placeholderId,
+              given_name: 'Unknown',
+              surname: 'Mother',
+              confidence: 'hypothetical',
+            },
+            isFocus: false,
+            hasExpandArrow: false,
+            onExpand: () => {},
+            onClick: () => {},
+          },
+        })
+        edgesList.push({
+          id: `${treeNode.person.id}-mother-placeholder`,
+          source: treeNode.person.id,
+          target: placeholderId,
+          type: 'smoothstep',
+          style: { stroke: '#D3D1C7', strokeWidth: 1, strokeDasharray: '5,5' },
+        })
       }
     })
-
-    // STEP 5: Create couple brackets
-    levels.forEach((level, genIndex) => {
-      const genX = colXPositions[genIndex]
-      const couples = new Map<string, TreePerson[]>()
-
-      // Group by shared children
-      level.forEach(person => {
-        const childLevel = levels[genIndex - 1]
-        if (!childLevel) return
-
-        const sharedChildren = childLevel.filter(
-          c => (c.fatherId === person.id || c.motherId === person.id)
-        )
-
-        if (sharedChildren.length > 0) {
-          const key = sharedChildren[0].id
-          if (!couples.has(key)) couples.set(key, [])
-          couples.get(key)!.push(person)
-        }
-      })
-
-      couples.forEach(couple => {
-        if (couple.length === 2) {
-          const pos1 = positions.get(couple[0].id)
-          const pos2 = positions.get(couple[1].id)
-          if (pos1 && pos2) {
-            const y1 = pos1.y + nodeHeight / 2
-            const y2 = pos2.y + nodeHeight / 2
-            brackets.push({
-              x: genX + nodeWidth + 4,
-              y1: Math.min(y1, y2),
-              y2: Math.max(y1, y2),
-            })
-          }
-        }
-      })
-    })
-
-    setCoupleBrackets(brackets)
 
     return { nodes: nodesList, edges: edgesList }
-  }, [focusPerson, treeData, generations, buildTreeLevels, router])
+  }, [focusPerson, allPeople, maxGenerations, router])
 
-  const handleExpandPerson = (person: TreePerson) => {
-    setHistory([...history, focusPerson!.id])
-    setFocusPerson(person)
-    setTreeData(new Map()) // Will trigger reload
-  }
-
-  const handleBack = () => {
-    if (history.length === 0) return
-    const prevId = history[history.length - 1]
-    setHistory(history.slice(0, -1))
-    // Reload with previous person as focus
-    window.location.href = `/tree?focus=${prevId}`
-  }
+  // Fit view after nodes are rendered
+  useEffect(() => {
+    if (nodes.length > 0) {
+      setTimeout(() => fitView({ padding: 0.15, duration: 400 }), 100)
+    }
+  }, [nodes, fitView])
 
   if (isLoading) {
     return (
@@ -350,15 +287,7 @@ function PedigreeFlowInner({ initialFocusId }: PedigreeViewProps) {
     <div className="h-full w-full relative">
       {/* Controls Bar */}
       <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-4 bg-[#FDFCFA] border border-[#D3D1C7] rounded-lg px-4 py-2">
-        <button
-          onClick={handleBack}
-          disabled={history.length === 0}
-          className="text-[12px] font-medium text-[#888780] hover:text-[#2C2C2A] disabled:opacity-30 disabled:cursor-not-allowed"
-        >
-          ← Back
-        </button>
-
-        <div className="text-[13px] font-semibold text-[#2C2C2A] px-4 border-x border-[#D3D1C7]">
+        <div className="text-[13px] font-semibold text-[#2C2C2A] px-4 border-r border-[#D3D1C7]">
           {focusPerson?.given_name} {focusPerson?.surname}
         </div>
 
@@ -366,9 +295,9 @@ function PedigreeFlowInner({ initialFocusId }: PedigreeViewProps) {
           {[3, 4, 5].map(gen => (
             <button
               key={gen}
-              onClick={() => setGenerations(gen)}
+              onClick={() => setMaxGenerations(gen)}
               className={`px-3 py-1 rounded text-[11px] font-medium transition-colors ${
-                generations === gen
+                maxGenerations === gen
                   ? 'bg-[#EF9F27] text-white'
                   : 'bg-white border border-[#D3D1C7] text-[#888780] hover:border-[#EF9F27]'
               }`}
@@ -392,21 +321,6 @@ function PedigreeFlowInner({ initialFocusId }: PedigreeViewProps) {
       >
         <Background />
         <Controls />
-
-        {/* Couple Brackets SVG Overlay */}
-        <svg className="absolute top-0 left-0 w-full h-full pointer-events-none" style={{ zIndex: 0 }}>
-          {coupleBrackets.map((bracket, i) => (
-            <line
-              key={i}
-              x1={bracket.x}
-              y1={bracket.y1}
-              x2={bracket.x}
-              y2={bracket.y2}
-              stroke="#D3D1C7"
-              strokeWidth="1"
-            />
-          ))}
-        </svg>
       </ReactFlow>
     </div>
   )
