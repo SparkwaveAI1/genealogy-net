@@ -42,16 +42,21 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Convert file to base64
+    // Read file content
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
-    const base64 = buffer.toString('base64');
 
-    // Determine if this is an image or PDF
+    // Determine file type
     const isImage = file.type.startsWith('image/');
     const isPDF = file.type === 'application/pdf';
+    const isText = file.type === 'text/plain' || file.name.endsWith('.txt');
+    const isMarkdown = file.type === 'text/markdown' || file.name.endsWith('.md');
+    const isWordDoc = file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+                      file.type === 'application/msword' ||
+                      file.name.endsWith('.docx') ||
+                      file.name.endsWith('.doc');
 
-    // Build user message
+    // Build user message prefix
     let userMessage = 'Please analyze this genealogy document.\n\n';
     if (individual_context) {
       userMessage += `Individual context: ${individual_context}\n`;
@@ -66,7 +71,18 @@ export async function POST(req: NextRequest) {
     // Build content array based on file type
     const content: any[] = [];
 
-    if (isPDF) {
+    if (isText || isMarkdown) {
+      // Handle text-based files
+      const textContent = buffer.toString('utf-8');
+      userMessage += `\n\n--- FILE CONTENT (${file.name}) ---\n${textContent}\n--- END FILE CONTENT ---`;
+
+      content.push({
+        type: 'text',
+        text: userMessage,
+      });
+    } else if (isPDF || isWordDoc) {
+      // Handle PDF and Word documents as base64
+      const base64 = buffer.toString('base64');
       content.push({
         type: 'document',
         source: {
@@ -75,7 +91,14 @@ export async function POST(req: NextRequest) {
           data: base64,
         },
       });
+      content.push({
+        type: 'text',
+        text: userMessage,
+      });
     } else if (isImage) {
+      // Handle images
+      const base64 = buffer.toString('base64');
+
       // Determine image media type
       let imageMediaType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' = 'image/jpeg';
       if (file.type === 'image/png') {
@@ -94,17 +117,27 @@ export async function POST(req: NextRequest) {
           data: base64,
         },
       });
+      content.push({
+        type: 'text',
+        text: userMessage,
+      });
     } else {
-      return NextResponse.json(
-        { error: 'Unsupported file type. Please upload a PDF or image file.' },
-        { status: 400 }
-      );
-    }
+      // Fallback: try to read as text
+      try {
+        const textContent = buffer.toString('utf-8');
+        userMessage += `\n\n--- FILE CONTENT (${file.name}) ---\n${textContent}\n--- END FILE CONTENT ---`;
 
-    content.push({
-      type: 'text',
-      text: userMessage,
-    });
+        content.push({
+          type: 'text',
+          text: userMessage,
+        });
+      } catch (error) {
+        return NextResponse.json(
+          { error: 'Unsupported file type. Please upload a PDF, image, text, markdown, or Word document.' },
+          { status: 400 }
+        );
+      }
+    }
 
     // Send to Claude API
     const response = await anthropic.messages.create({

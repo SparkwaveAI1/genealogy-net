@@ -288,7 +288,7 @@ export default function Dashboard() {
               ref={fileInputRef}
               type="file"
               onChange={handleFileSelect}
-              accept=".pdf,.jpg,.jpeg,.png,.gif,.webp"
+              accept=".pdf,.jpg,.jpeg,.png,.gif,.webp,.txt,.md,.doc,.docx"
               className="hidden"
             />
 
