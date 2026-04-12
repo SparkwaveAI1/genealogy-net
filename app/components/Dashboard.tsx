@@ -161,14 +161,23 @@ export default function Dashboard() {
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
+      console.log('File selected:', e.target.files[0].name)
       setSelectedFile(e.target.files[0])
       setUploadResult(null)
+      setUploadError(null)
     }
   }
 
   const handleUpload = async () => {
-    if (!selectedFile) return
+    console.log('handleUpload called, selectedFile:', selectedFile?.name)
 
+    if (!selectedFile) {
+      console.log('No file selected, returning')
+      setUploadError('Please select a file first')
+      return
+    }
+
+    console.log('Starting upload...')
     setUploadProgress(true)
     setUploadResult(null)
     setUploadError(null)
@@ -183,12 +192,15 @@ export default function Dashboard() {
         formData.append('mystery_id', selectedMysteryId)
       }
 
+      console.log('Sending fetch request to /api/documents')
       const response = await fetch('/api/documents', {
         method: 'POST',
         body: formData,
       })
 
+      console.log('Response status:', response.status)
       const data = await response.json()
+      console.log('Response data:', data)
 
       if (!response.ok) {
         setUploadError(data.error || `Upload failed with status ${response.status}`)
@@ -196,6 +208,7 @@ export default function Dashboard() {
       }
 
       if (data.success && data.analysis) {
+        console.log('Analysis received successfully')
         setUploadResult(data.analysis)
       } else {
         setUploadError(data.error || 'Unknown error occurred')
@@ -205,6 +218,7 @@ export default function Dashboard() {
       console.error('Error uploading document:', error)
       setUploadError(error instanceof Error ? error.message : 'Network error occurred')
     } finally {
+      console.log('Upload process completed')
       setUploadProgress(false)
     }
   }
@@ -363,12 +377,22 @@ export default function Dashboard() {
             </select>
 
             <button
-              onClick={handleUpload}
+              onClick={(e) => {
+                console.log('Button clicked!', { selectedFile: selectedFile?.name, uploadProgress })
+                handleUpload()
+              }}
               disabled={!selectedFile || uploadProgress}
               className="w-full bg-[#EF9F27] text-white py-2 rounded text-[11px] font-medium hover:bg-[#d88d1f] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {uploadProgress ? 'Analyzing...' : 'Analyze with Hermes'}
             </button>
+
+            {/* Debug Info */}
+            {selectedFile && (
+              <div className="mt-2 text-[10px] text-gray-500">
+                Ready to upload: {selectedFile.name} ({(selectedFile.size / 1024).toFixed(1)} KB)
+              </div>
+            )}
 
             {/* Error Display */}
             {uploadError && (
