@@ -38,6 +38,7 @@ export interface Person {
   brick_wall?: boolean
   creation_source?: string
   creation_reason?: string
+  ahnentafel?: number
   first_documented?: string
   first_documented_text?: string
   workspace_id?: string
