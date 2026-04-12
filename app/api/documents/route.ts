@@ -1,0 +1,195 @@
+import Anthropic from '@anthropic-ai/sdk';
+import { NextRequest, NextResponse } from 'next/server';
+import { supabase } from '@/lib/supabase';
+
+const anthropic = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
+});
+
+const GENEALOGY_DOCUMENT_SYSTEM_PROMPT = `You are a genealogy document analyst following the Genealogical Proof Standard. Analyze this document and extract:
+- All named individuals with dates and places
+- Document type and date
+- What this confirms or contradicts
+- Confidence level of key claims
+- Which mystery it might relate to
+- What follow-up records to search
+
+Flag any suspicious or unverified claims.
+
+Return your analysis as a JSON object with these fields:
+{
+  "individuals_found": [{"name": "...", "dates": "...", "places": "...", "role": "..."}],
+  "key_facts": ["fact 1", "fact 2", ...],
+  "confidence_assessment": "overall confidence level and reasoning",
+  "flags": ["flag 1", "flag 2", ...],
+  "suggested_mystery_link": "which mystery this might relate to",
+  "follow_up_records": ["record type 1", "record type 2", ...]
+}`;
+
+export async function POST(req: NextRequest) {
+  try {
+    const formData = await req.formData();
+    const file = formData.get('file') as File;
+    const individual_context = formData.get('individual_context') as string;
+    const document_type = formData.get('document_type') as string;
+    const processing_instructions = formData.get('processing_instructions') as string;
+    const mystery_id = formData.get('mystery_id') as string;
+
+    if (!file) {
+      return NextResponse.json(
+        { error: 'No file provided' },
+        { status: 400 }
+      );
+    }
+
+    // Convert file to base64
+    const bytes = await file.arrayBuffer();
+    const buffer = Buffer.from(bytes);
+    const base64 = buffer.toString('base64');
+
+    // Determine if this is an image or PDF
+    const isImage = file.type.startsWith('image/');
+    const isPDF = file.type === 'application/pdf';
+
+    // Build user message
+    let userMessage = 'Please analyze this genealogy document.\n\n';
+    if (individual_context) {
+      userMessage += `Individual context: ${individual_context}\n`;
+    }
+    if (document_type) {
+      userMessage += `Document type: ${document_type}\n`;
+    }
+    if (processing_instructions) {
+      userMessage += `Instructions: ${processing_instructions}\n`;
+    }
+
+    // Build content array based on file type
+    const content: any[] = [];
+
+    if (isPDF) {
+      content.push({
+        type: 'document',
+        source: {
+          type: 'base64',
+          media_type: 'application/pdf',
+          data: base64,
+        },
+      });
+    } else if (isImage) {
+      // Determine image media type
+      let imageMediaType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' = 'image/jpeg';
+      if (file.type === 'image/png') {
+        imageMediaType = 'image/png';
+      } else if (file.type === 'image/gif') {
+        imageMediaType = 'image/gif';
+      } else if (file.type === 'image/webp') {
+        imageMediaType = 'image/webp';
+      }
+
+      content.push({
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: imageMediaType,
+          data: base64,
+        },
+      });
+    } else {
+      return NextResponse.json(
+        { error: 'Unsupported file type. Please upload a PDF or image file.' },
+        { status: 400 }
+      );
+    }
+
+    content.push({
+      type: 'text',
+      text: userMessage,
+    });
+
+    // Send to Claude API
+    const response = await anthropic.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 2000,
+      system: GENEALOGY_DOCUMENT_SYSTEM_PROMPT,
+      messages: [
+        {
+          role: 'user',
+          content,
+        },
+      ],
+    });
+
+    // Extract text content from response
+    const textContent = response.content.find(block => block.type === 'text');
+    let analysisText = textContent && 'text' in textContent ? textContent.text : '';
+
+    // Try to parse JSON from the response
+    let analysis;
+    try {
+      // Look for JSON in the response (might be wrapped in markdown code blocks)
+      const jsonMatch = analysisText.match(/```json\n([\s\S]*?)\n```/) || analysisText.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const jsonStr = jsonMatch[1] || jsonMatch[0];
+        analysis = JSON.parse(jsonStr);
+      } else {
+        // If no JSON found, create a structured response from the text
+        analysis = {
+          individuals_found: [],
+          key_facts: [analysisText],
+          confidence_assessment: 'See analysis text',
+          flags: [],
+          suggested_mystery_link: '',
+          follow_up_records: [],
+        };
+      }
+    } catch (parseError) {
+      // If parsing fails, wrap the text response
+      analysis = {
+        individuals_found: [],
+        key_facts: [analysisText],
+        confidence_assessment: 'See analysis text',
+        flags: [],
+        suggested_mystery_link: '',
+        follow_up_records: [],
+      };
+    }
+
+    // Save document record to Supabase
+    const { data: documentData, error: dbError } = await supabase
+      .from('documents')
+      .insert([
+        {
+          title: file.name,
+          document_type: document_type || 'other',
+          description: analysisText.substring(0, 500), // Store first 500 chars of analysis
+          document_date: new Date().toISOString(),
+        },
+      ])
+      .select()
+      .single();
+
+    if (dbError) {
+      console.error('Error saving document to database:', dbError);
+    }
+
+    // If mystery_id provided, link the document to the mystery
+    if (mystery_id && documentData) {
+      // Note: You'd need a mystery_documents table for this
+      // For now, just return the mystery_id in the response
+    }
+
+    return NextResponse.json({
+      success: true,
+      analysis,
+      document_id: documentData?.id,
+      mystery_id: mystery_id || null,
+      raw_response: analysisText,
+    });
+  } catch (error: any) {
+    console.error('Document processing error:', error);
+    return NextResponse.json(
+      { error: error.message || 'An error occurred processing the document' },
+      { status: 500 }
+    );
+  }
+}

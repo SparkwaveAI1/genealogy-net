@@ -21,6 +21,15 @@ interface Person {
   confidence?: string
 }
 
+interface AnalysisResult {
+  individuals_found: Array<{ name: string; dates?: string; places?: string; role?: string }>
+  key_facts: string[]
+  confidence_assessment: string
+  flags: string[]
+  suggested_mystery_link: string
+  follow_up_records: string[]
+}
+
 export default function Dashboard() {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
@@ -29,6 +38,16 @@ export default function Dashboard() {
   const [needsAttention, setNeedsAttention] = useState<Person[]>([])
   const [wikiActivity, setWikiActivity] = useState<string[]>([])
   const messagesEndRef = useRef<HTMLDivElement>(null)
+
+  // Document upload state
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const [uploadProgress, setUploadProgress] = useState(false)
+  const [uploadResult, setUploadResult] = useState<AnalysisResult | null>(null)
+  const [individualContext, setIndividualContext] = useState('')
+  const [documentType, setDocumentType] = useState('')
+  const [processingInstructions, setProcessingInstructions] = useState('')
+  const [selectedMysteryId, setSelectedMysteryId] = useState('')
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -139,6 +158,68 @@ export default function Dashboard() {
     }
   }
 
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      setSelectedFile(e.target.files[0])
+      setUploadResult(null)
+    }
+  }
+
+  const handleUpload = async () => {
+    if (!selectedFile) return
+
+    setUploadProgress(true)
+    setUploadResult(null)
+
+    try {
+      const formData = new FormData()
+      formData.append('file', selectedFile)
+      formData.append('individual_context', individualContext)
+      formData.append('document_type', documentType)
+      formData.append('processing_instructions', processingInstructions)
+      if (selectedMysteryId) {
+        formData.append('mystery_id', selectedMysteryId)
+      }
+
+      const response = await fetch('/api/documents', {
+        method: 'POST',
+        body: formData,
+      })
+
+      const data = await response.json()
+      if (data.success && data.analysis) {
+        setUploadResult(data.analysis)
+      } else {
+        console.error('Upload error:', data.error)
+      }
+    } catch (error) {
+      console.error('Error uploading document:', error)
+    } finally {
+      setUploadProgress(false)
+    }
+  }
+
+  const handleAddToWiki = async () => {
+    if (!uploadResult) return
+
+    try {
+      const content = `## Document Analysis\n\n${uploadResult.key_facts.join('\n')}\n\nConfidence: ${uploadResult.confidence_assessment}`
+
+      await fetch('/api/wiki-sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          page: 'document-analysis.md',
+          content,
+        }),
+      })
+
+      alert('Added to wiki!')
+    } catch (error) {
+      console.error('Error adding to wiki:', error)
+    }
+  }
+
   return (
     <div className="flex h-screen">
       {/* Agent Panel (Center) */}
@@ -202,35 +283,145 @@ export default function Dashboard() {
           {/* Document Upload */}
           <div className="bg-[#FDFCFA] border border-[#D3D1C7] rounded-lg p-4">
             <h3 className="text-[13px] font-semibold mb-3">Document Upload</h3>
-            <div className="border-2 border-dashed border-[#D3D1C7] rounded-lg p-4 text-center mb-3 cursor-pointer hover:border-[#EF9F27] transition-colors">
-              <p className="text-[11px] text-gray-500">Drop files here or click</p>
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              onChange={handleFileSelect}
+              accept=".pdf,.jpg,.jpeg,.png,.gif,.webp"
+              className="hidden"
+            />
+
+            <div
+              onClick={() => fileInputRef.current?.click()}
+              className="border-2 border-dashed border-[#D3D1C7] rounded-lg p-4 text-center mb-3 cursor-pointer hover:border-[#EF9F27] transition-colors"
+            >
+              {selectedFile ? (
+                <div>
+                  <p className="text-[11px] text-gray-900 font-medium">{selectedFile.name}</p>
+                  <p className="text-[10px] text-gray-500 mt-1">
+                    {(selectedFile.size / 1024).toFixed(1)} KB
+                  </p>
+                </div>
+              ) : (
+                <p className="text-[11px] text-gray-500">Drop files here or click</p>
+              )}
             </div>
+
             <textarea
+              value={individualContext}
+              onChange={(e) => setIndividualContext(e.target.value)}
               placeholder="Who does this relate to?"
-              className="w-full px-2 py-1.5 border border-[#D3D1C7] rounded text-[11px] mb-2"
+              className="w-full px-2 py-1.5 border border-[#D3D1C7] rounded text-[11px] mb-2 focus:outline-none focus:border-[#EF9F27]"
               rows={3}
             />
-            <select className="w-full px-2 py-1.5 border border-[#D3D1C7] rounded text-[11px] mb-2">
-              <option>Document type</option>
-              <option>Census</option>
-              <option>Birth Certificate</option>
-              <option>Death Certificate</option>
-              <option>Marriage Record</option>
+
+            <select
+              value={documentType}
+              onChange={(e) => setDocumentType(e.target.value)}
+              className="w-full px-2 py-1.5 border border-[#D3D1C7] rounded text-[11px] mb-2 focus:outline-none focus:border-[#EF9F27]"
+            >
+              <option value="">Document type</option>
+              <option value="census">Census</option>
+              <option value="certificate">Birth Certificate</option>
+              <option value="certificate">Death Certificate</option>
+              <option value="certificate">Marriage Record</option>
+              <option value="will">Will</option>
+              <option value="deed">Deed</option>
+              <option value="letter">Letter</option>
+              <option value="photo">Photo</option>
+              <option value="other">Other</option>
             </select>
+
             <textarea
+              value={processingInstructions}
+              onChange={(e) => setProcessingInstructions(e.target.value)}
               placeholder="Processing instructions"
-              className="w-full px-2 py-1.5 border border-[#D3D1C7] rounded text-[11px] mb-2"
+              className="w-full px-2 py-1.5 border border-[#D3D1C7] rounded text-[11px] mb-2 focus:outline-none focus:border-[#EF9F27]"
               rows={3}
             />
-            <select className="w-full px-2 py-1.5 border border-[#D3D1C7] rounded text-[11px] mb-3">
-              <option>Link to mystery</option>
+
+            <select
+              value={selectedMysteryId}
+              onChange={(e) => setSelectedMysteryId(e.target.value)}
+              className="w-full px-2 py-1.5 border border-[#D3D1C7] rounded text-[11px] mb-3 focus:outline-none focus:border-[#EF9F27]"
+            >
+              <option value="">Link to mystery</option>
               {mysteries.map(m => (
                 <option key={m.id} value={m.id}>{m.title}</option>
               ))}
             </select>
-            <button className="w-full bg-[#EF9F27] text-white py-2 rounded text-[11px] font-medium hover:bg-[#d88d1f] transition-colors">
-              Analyze with Hermes
+
+            <button
+              onClick={handleUpload}
+              disabled={!selectedFile || uploadProgress}
+              className="w-full bg-[#EF9F27] text-white py-2 rounded text-[11px] font-medium hover:bg-[#d88d1f] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {uploadProgress ? 'Analyzing...' : 'Analyze with Hermes'}
             </button>
+
+            {/* Analysis Results */}
+            {uploadResult && (
+              <div className="mt-4 pt-4 border-t border-[#D3D1C7]">
+                <h4 className="text-[11px] font-semibold mb-2">Analysis Results</h4>
+
+                {uploadResult.individuals_found.length > 0 && (
+                  <div className="mb-3">
+                    <div className="text-[10px] text-gray-500 uppercase mb-1">Individuals Found</div>
+                    <div className="space-y-1">
+                      {uploadResult.individuals_found.map((ind, idx) => (
+                        <div key={idx} className="text-[11px] bg-[#F5F2ED] p-2 rounded">
+                          <div className="font-medium">{ind.name}</div>
+                          {ind.dates && <div className="text-gray-600">{ind.dates}</div>}
+                          {ind.places && <div className="text-gray-600">{ind.places}</div>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {uploadResult.key_facts.length > 0 && (
+                  <div className="mb-3">
+                    <div className="text-[10px] text-gray-500 uppercase mb-1">Key Facts</div>
+                    <ul className="text-[11px] space-y-1">
+                      {uploadResult.key_facts.slice(0, 3).map((fact, idx) => (
+                        <li key={idx} className="text-gray-900">• {fact}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {uploadResult.flags.length > 0 && (
+                  <div className="mb-3">
+                    <div className="text-[10px] text-gray-500 uppercase mb-1">Flags</div>
+                    <div className="space-y-1">
+                      {uploadResult.flags.map((flag, idx) => (
+                        <div key={idx} className="text-[11px] text-[#791F1F] bg-[#FCEBEB] p-1.5 rounded">
+                          {flag}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex gap-2 mt-3">
+                  {selectedMysteryId && (
+                    <button
+                      onClick={() => window.location.href = `/mysteries/${selectedMysteryId}`}
+                      className="flex-1 px-2 py-1.5 bg-[#E6F1FB] text-[#0C447C] rounded text-[10px] font-medium hover:bg-[#d5e7f5] transition-colors"
+                    >
+                      View Mystery
+                    </button>
+                  )}
+                  <button
+                    onClick={handleAddToWiki}
+                    className="flex-1 px-2 py-1.5 bg-[#F5F2ED] text-gray-700 rounded text-[10px] font-medium hover:bg-[#e5e2dd] transition-colors"
+                  >
+                    Add to Wiki
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Active Mysteries */}
