@@ -125,6 +125,7 @@ export default async function PersonPage({ params }: PageProps) {
   const spouses: Person[] = []
   const children: Person[] = []
   const siblings: Person[] = []
+  const seenSpouseIds = new Set<string>()
 
   relationships?.forEach(rel => {
     const isSubject = rel.person_id === id
@@ -140,8 +141,13 @@ export default async function PersonPage({ params }: PageProps) {
     } else if (relType === 'mother' && isSubject) {
       mother = relatedPerson
     } else if (relType === 'spouse') {
-      spouses.push(relatedPerson)
-    } else if (relType === 'child' && isSubject) {
+      // Deduplicate spouses by person_id
+      if (!seenSpouseIds.has(relatedPerson.id)) {
+        spouses.push(relatedPerson)
+        seenSpouseIds.add(relatedPerson.id)
+      }
+    } else if (relType === 'child' && !isSubject) {
+      // Fix: children are where the related person is the child (not the subject)
       children.push(relatedPerson)
     } else if (relType === 'sibling') {
       siblings.push(relatedPerson)
@@ -229,7 +235,7 @@ export default async function PersonPage({ params }: PageProps) {
                   <div className="text-[13px] text-gray-400 italic mt-1">Unknown</div>
                 )}
               </div>
-              <ConfidenceBadge confidence={person.confidence} size="small" />
+              <ConfidenceBadge confidence={person.birth_date_confidence} size="small" />
             </div>
 
             {/* Death */}
@@ -252,7 +258,7 @@ export default async function PersonPage({ params }: PageProps) {
                   <div className="text-[13px] text-gray-400 italic mt-1">Unknown</div>
                 )}
               </div>
-              <ConfidenceBadge confidence={person.confidence} size="small" />
+              <ConfidenceBadge confidence={person.death_date_confidence} size="small" />
             </div>
 
             {/* Burial */}

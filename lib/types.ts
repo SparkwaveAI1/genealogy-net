@@ -9,10 +9,12 @@ export interface Person {
   occupation?: string
   birth_year?: number
   birth_year_type?: 'exact' | 'circa' | 'before' | 'after'
+  birth_date_confidence?: 'confirmed' | 'probable' | 'possible' | 'hypothetical'
   birthplace_code?: string
   birthplace_detail?: string
   death_year?: number
   death_year_type?: 'exact' | 'circa' | 'before' | 'after'
+  death_date_confidence?: 'confirmed' | 'probable' | 'possible' | 'hypothetical'
   death_place_code?: string
   death_place_detail?: string
   burial_place?: string
