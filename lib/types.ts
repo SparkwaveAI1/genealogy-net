@@ -44,6 +44,8 @@ export interface Person {
   first_documented?: string
   first_documented_text?: string
   workspace_id?: string
+  father_id?: string
+  mother_id?: string
 }
 
 export interface Event {

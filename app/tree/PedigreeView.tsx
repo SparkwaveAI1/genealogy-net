@@ -59,32 +59,22 @@ function PedigreeFlowInner({ initialFocusId }: PedigreeViewProps) {
         return
       }
 
-      // Get relationships for focus person
-      const { data: focusRels } = await supabase
-        .from('family_relationships')
-        .select('related_person_id, relationship_type')
-        .eq('person_id', focus.id)
-
-      const fatherRel = focusRels?.find(r => r.relationship_type === 'father')
-      const motherRel = focusRels?.find(r => r.relationship_type === 'mother')
-
-      // Count siblings
+      // Count siblings (people who share same father)
       let siblingCount = 0
-      if (fatherRel) {
+      if (focus.father_id) {
         const { count } = await supabase
-          .from('family_relationships')
+          .from('people')
           .select('*', { count: 'exact', head: true })
-          .eq('related_person_id', fatherRel.related_person_id)
-          .eq('relationship_type', 'father')
-          .neq('person_id', focus.id)
+          .eq('father_id', focus.father_id)
+          .neq('id', focus.id)
         siblingCount = count || 0
       }
 
       const focusWithRels: TreePerson = {
         ...focus,
-        fatherId: fatherRel?.related_person_id,
-        motherId: motherRel?.related_person_id,
-        hasParents: !!(fatherRel || motherRel),
+        fatherId: focus.father_id,
+        motherId: focus.mother_id,
+        hasParents: !!(focus.father_id || focus.mother_id),
         siblingCount,
       }
 
@@ -120,21 +110,11 @@ function PedigreeFlowInner({ initialFocusId }: PedigreeViewProps) {
     if (!parents) return
 
     for (const parent of parents) {
-      // Get this parent's relationships
-      const { data: rels } = await supabase
-        .from('family_relationships')
-        .select('related_person_id, relationship_type')
-        .eq('person_id', parent.id)
-        .in('relationship_type', ['father', 'mother'])
-
-      const fatherRel = rels?.find(r => r.relationship_type === 'father')
-      const motherRel = rels?.find(r => r.relationship_type === 'mother')
-
       const parentWithRels: TreePerson = {
         ...parent,
-        fatherId: fatherRel?.related_person_id,
-        motherId: motherRel?.related_person_id,
-        hasParents: !!(fatherRel || motherRel),
+        fatherId: parent.father_id,
+        motherId: parent.mother_id,
+        hasParents: !!(parent.father_id || parent.mother_id),
       }
 
       map.set(parent.id, parentWithRels)

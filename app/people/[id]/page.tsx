@@ -99,61 +99,111 @@ export default async function PersonPage({ params }: PageProps) {
     notFound()
   }
 
-  // Fetch family relationships
-  const { data: relationships } = await supabase
-    .from('family_relationships')
-    .select('*')
-    .or(`person_id.eq.${id},related_person_id.eq.${id}`)
-
-  // Get related person IDs
-  const relatedIds = relationships?.map(rel =>
-    rel.person_id === id ? rel.related_person_id : rel.person_id
-  ) || []
-
-  // Fetch related people
-  let relatedPeople: Person[] = []
-  if (relatedIds.length > 0) {
-    const { data } = await supabase
-      .from('people')
-      .select('*')
-      .in('id', relatedIds)
-    relatedPeople = data || []
-  }
-
-  // Organize family by relationship type
+  // PARENTS - fetch via father_id and mother_id
   let father: Person | null = null
   let mother: Person | null = null
-  const spouses: Person[] = []
-  const children: Person[] = []
-  const siblings: Person[] = []
-  const seenSpouseIds = new Set<string>()
 
-  relationships?.forEach(rel => {
-    const isSubject = rel.person_id === id
-    const relatedId = isSubject ? rel.related_person_id : rel.person_id
-    const relatedPerson = relatedPeople.find(p => p.id === relatedId)
+  if (person.father_id) {
+    const { data } = await supabase
+      .from('people')
+      .select('id, given_name, surname, birth_year, death_year, confidence, ahnentafel')
+      .eq('id', person.father_id)
+      .maybeSingle()
+    father = data
+  }
 
-    if (!relatedPerson) return
+  if (person.mother_id) {
+    const { data } = await supabase
+      .from('people')
+      .select('id, given_name, surname, birth_year, death_year, confidence, ahnentafel')
+      .eq('id', person.mother_id)
+      .maybeSingle()
+    mother = data
+  }
 
-    const relType = rel.relationship_type
+  // CHILDREN - anyone with this person as father or mother
+  const { data: childrenData } = await supabase
+    .from('people')
+    .select('id, given_name, surname, birth_year, death_year, confidence, ahnentafel')
+    .or(`father_id.eq.${id},mother_id.eq.${id}`)
+    .order('birth_year', { ascending: true, nullsFirst: false })
 
-    if (relType === 'father' && isSubject) {
-      father = relatedPerson
-    } else if (relType === 'mother' && isSubject) {
-      mother = relatedPerson
-    } else if (relType === 'spouse') {
-      // Deduplicate spouses by person_id
-      if (!seenSpouseIds.has(relatedPerson.id)) {
-        spouses.push(relatedPerson)
-        seenSpouseIds.add(relatedPerson.id)
-      }
-    } else if (relType === 'child' && !isSubject) {
-      // Fix: children are where the related person is the child (not the subject)
-      children.push(relatedPerson)
-    } else if (relType === 'sibling') {
-      siblings.push(relatedPerson)
+  const children = childrenData || []
+
+  // SIBLINGS - build from paternal and maternal queries
+  const paternalSiblings: Person[] = []
+  const maternalSiblings: Person[] = []
+
+  if (person.father_id) {
+    const { data } = await supabase
+      .from('people')
+      .select('id, given_name, surname, birth_year, death_year, confidence, ahnentafel, father_id, mother_id')
+      .eq('father_id', person.father_id)
+      .neq('id', id)
+    if (data) paternalSiblings.push(...data)
+  }
+
+  if (person.mother_id) {
+    const { data } = await supabase
+      .from('people')
+      .select('id, given_name, surname, birth_year, death_year, confidence, ahnentafel, father_id, mother_id')
+      .eq('mother_id', person.mother_id)
+      .neq('id', id)
+    if (data) maternalSiblings.push(...data)
+  }
+
+  // Classify siblings (full vs half) and deduplicate
+  const siblingMap = new Map<string, { person: Person; type: 'full' | 'paternal-half' | 'maternal-half' }>()
+
+  paternalSiblings.forEach(sib => {
+    const inMaternal = maternalSiblings.some(m => m.id === sib.id)
+    const type = inMaternal ? 'full' : 'paternal-half'
+    siblingMap.set(sib.id, { person: sib, type })
+  })
+
+  maternalSiblings.forEach(sib => {
+    if (!siblingMap.has(sib.id)) {
+      siblingMap.set(sib.id, { person: sib, type: 'maternal-half' })
     }
   })
+
+  // Separate and sort siblings
+  const fullSiblings = Array.from(siblingMap.values())
+    .filter(s => s.type === 'full')
+    .map(s => s.person)
+    .sort((a, b) => (a.birth_year || 9999) - (b.birth_year || 9999))
+
+  const paternalHalfSiblings = Array.from(siblingMap.values())
+    .filter(s => s.type === 'paternal-half')
+    .map(s => s.person)
+    .sort((a, b) => (a.birth_year || 9999) - (b.birth_year || 9999))
+
+  const maternalHalfSiblings = Array.from(siblingMap.values())
+    .filter(s => s.type === 'maternal-half')
+    .map(s => s.person)
+    .sort((a, b) => (a.birth_year || 9999) - (b.birth_year || 9999))
+
+  // SPOUSES - still use family_relationships table
+  const { data: spouseRels } = await supabase
+    .from('family_relationships')
+    .select('person_id, related_person_id')
+    .or(`person_id.eq.${id},related_person_id.eq.${id}`)
+    .eq('relationship_type', 'spouse')
+
+  const spouseIds = new Set<string>()
+  spouseRels?.forEach(rel => {
+    const spouseId = rel.person_id === id ? rel.related_person_id : rel.person_id
+    spouseIds.add(spouseId)
+  })
+
+  let spouses: Person[] = []
+  if (spouseIds.size > 0) {
+    const { data } = await supabase
+      .from('people')
+      .select('id, given_name, surname, birth_year, death_year, confidence, ahnentafel')
+      .in('id', Array.from(spouseIds))
+    spouses = data || []
+  }
 
   // Fetch connected mysteries
   const { data: mysteryConnections } = await supabase
@@ -370,13 +420,41 @@ export default async function PersonPage({ params }: PageProps) {
               <div className="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Siblings</div>
               <AddRelationshipButton type="sibling" personId={id} />
             </div>
-            {siblings.length > 0 ? (
-              <div className="grid grid-cols-2 gap-2">
-                {siblings.map(sibling => (
-                  <PersonCard key={sibling.id} person={sibling} />
-                ))}
+
+            {fullSiblings.length > 0 && (
+              <div className="mb-3">
+                <div className="text-[10px] text-gray-500 mb-1">Full Siblings</div>
+                <div className="grid grid-cols-2 gap-2">
+                  {fullSiblings.map(sibling => (
+                    <PersonCard key={sibling.id} person={sibling} />
+                  ))}
+                </div>
               </div>
-            ) : (
+            )}
+
+            {paternalHalfSiblings.length > 0 && (
+              <div className="mb-3">
+                <div className="text-[10px] text-gray-500 mb-1">Paternal Half-Siblings</div>
+                <div className="grid grid-cols-2 gap-2">
+                  {paternalHalfSiblings.map(sibling => (
+                    <PersonCard key={sibling.id} person={sibling} />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {maternalHalfSiblings.length > 0 && (
+              <div className="mb-3">
+                <div className="text-[10px] text-gray-500 mb-1">Maternal Half-Siblings</div>
+                <div className="grid grid-cols-2 gap-2">
+                  {maternalHalfSiblings.map(sibling => (
+                    <PersonCard key={sibling.id} person={sibling} />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {fullSiblings.length === 0 && paternalHalfSiblings.length === 0 && maternalHalfSiblings.length === 0 && (
               <p className="text-[11px] text-gray-400 italic">No siblings recorded</p>
             )}
           </div>
