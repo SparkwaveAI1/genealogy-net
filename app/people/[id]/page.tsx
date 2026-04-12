@@ -1,23 +1,81 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { createServerSupabaseClient } from '@/lib/supabase-server'
-import { Person, FamilyRelationship } from '@/lib/types'
+import { Person } from '@/lib/types'
 
-function ConfidenceBadge({ confidence }: { confidence?: string }) {
-  const colors = {
-    confirmed: 'bg-green-100 text-green-800',
-    probable: 'bg-blue-100 text-blue-800',
-    possible: 'bg-yellow-100 text-yellow-800',
-    hypothetical: 'bg-orange-100 text-orange-800',
-    contradicted: 'bg-red-100 text-red-800',
+function getInitials(person: Person): string {
+  const first = person.given_name?.charAt(0) || ''
+  const last = person.surname?.charAt(0) || ''
+  return (first + last).toUpperCase() || '?'
+}
+
+function ConfidenceBadge({ confidence, size = 'normal' }: { confidence?: string; size?: 'normal' | 'small' }) {
+  const styles = {
+    confirmed: 'bg-[#EAF3DE] text-[#27500A]',
+    probable: 'bg-[#E6F1FB] text-[#0C447C]',
+    possible: 'bg-[#FAEEDA] text-[#633806]',
+    hypothetical: 'bg-[#F1EFE8] text-[#5F5E5A]',
+    contradicted: 'bg-[#FCEBEB] text-[#791F1F]',
   }
 
-  const color = colors[confidence as keyof typeof colors] || 'bg-gray-100 text-gray-500'
+  const style = styles[confidence as keyof typeof styles] || 'bg-[#F1EFE8] text-[#5F5E5A]'
+  const sizeClass = size === 'small' ? 'px-1.5 py-0.5 text-[10px]' : 'px-2 py-0.5 text-[11px]'
 
   return (
-    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${color}`}>
+    <span className={`inline-flex items-center rounded font-medium ${style} ${sizeClass}`}>
       {confidence || 'not set'}
     </span>
+  )
+}
+
+function ConfidenceDot({ confidence }: { confidence?: string }) {
+  const colors = {
+    confirmed: 'bg-[#27500A]',
+    probable: 'bg-[#0C447C]',
+    possible: 'bg-[#633806]',
+    hypothetical: 'bg-[#5F5E5A]',
+    contradicted: 'bg-[#791F1F]',
+  }
+
+  const color = colors[confidence as keyof typeof colors] || 'bg-[#5F5E5A]'
+
+  return <div className={`w-2 h-2 rounded-full ${color}`} />
+}
+
+function PersonCard({ person, showDates = true }: { person: Person; showDates?: boolean }) {
+  const initials = getInitials(person)
+  const isDashed = person.confidence === 'hypothetical'
+
+  return (
+    <Link
+      href={`/people/${person.id}`}
+      className={`block bg-[#FDFCFA] border ${isDashed ? 'border-dashed' : 'border-solid'} border-[#D3D1C7] rounded p-3 hover:border-[#EF9F27] transition-colors`}
+    >
+      <div className="flex items-start gap-2">
+        <div className="w-8 h-8 rounded-full bg-[#F5F2ED] flex items-center justify-center text-[11px] font-semibold text-gray-700 flex-shrink-0">
+          {initials}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-[13px] font-medium text-gray-900 truncate">
+              {person.given_name} {person.surname}
+            </span>
+            <ConfidenceDot confidence={person.confidence} />
+          </div>
+          {showDates && (person.birth_year || person.death_year) && (
+            <div className="text-[11px] text-gray-500 mt-0.5">
+              {person.birth_year && person.death_year
+                ? `${person.birth_year}–${person.death_year}`
+                : person.birth_year
+                ? `b. ${person.birth_year}`
+                : person.death_year
+                ? `d. ${person.death_year}`
+                : ''}
+            </div>
+          )}
+        </div>
+      </div>
+    </Link>
   )
 }
 
@@ -62,10 +120,11 @@ export default async function PersonPage({ params }: PageProps) {
   }
 
   // Organize family by relationship type
-  const parents: any[] = []
-  const spouses: any[] = []
-  const children: any[] = []
-  const siblings: any[] = []
+  let father: Person | null = null
+  let mother: Person | null = null
+  const spouses: Person[] = []
+  const children: Person[] = []
+  const siblings: Person[] = []
 
   relationships?.forEach(rel => {
     const isSubject = rel.person_id === id
@@ -75,123 +134,87 @@ export default async function PersonPage({ params }: PageProps) {
     if (!relatedPerson) return
 
     const relType = rel.relationship_type
-    const entry = {
-      ...relatedPerson,
-      relationshipType: relType,
-    }
 
-    if (relType === 'parent' && isSubject) {
-      parents.push(entry)
-    } else if (relType === 'child' && !isSubject) {
-      parents.push(entry)
+    if (relType === 'father' && isSubject) {
+      father = relatedPerson
+    } else if (relType === 'mother' && isSubject) {
+      mother = relatedPerson
     } else if (relType === 'spouse') {
-      spouses.push(entry)
+      spouses.push(relatedPerson)
     } else if (relType === 'child' && isSubject) {
-      children.push(entry)
-    } else if (relType === 'parent' && !isSubject) {
-      children.push(entry)
+      children.push(relatedPerson)
     } else if (relType === 'sibling') {
-      siblings.push(entry)
+      siblings.push(relatedPerson)
     }
   })
 
-  // Fetch sources (if there's a join table or direct reference)
-  // For now, we'll leave this as a placeholder since the exact schema isn't clear
-  const sources: any[] = []
+  // Fetch connected mysteries
+  const { data: mysteryConnections } = await supabase
+    .from('mystery_people')
+    .select('mystery_id')
+    .eq('person_id', id)
+
+  let mysteries: any[] = []
+  if (mysteryConnections && mysteryConnections.length > 0) {
+    const mysteryIds = mysteryConnections.map(mc => mc.mystery_id)
+    const { data } = await supabase
+      .from('mysteries')
+      .select('*')
+      .in('id', mysteryIds)
+    mysteries = data || []
+  }
 
   const fullName = [person.given_name, person.surname].filter(Boolean).join(' ') || 'Unknown Name'
   const lifeDates = person.birth_year && person.death_year
-    ? `${person.birth_year} - ${person.death_year}`
+    ? `${person.birth_year}–${person.death_year}`
     : person.birth_year
     ? `b. ${person.birth_year}`
     : person.death_year
     ? `d. ${person.death_year}`
     : ''
 
+  const initials = getInitials(person)
+
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-2xl font-bold text-gray-900">{fullName}</h1>
-              {lifeDates && <p className="text-sm text-gray-600 mt-1">{lifeDates}</p>}
+    <div className="flex h-screen overflow-hidden">
+      {/* Main Content */}
+      <div className="flex-1 overflow-y-auto p-6">
+        {/* Header */}
+        <div className="mb-6">
+          <div className="flex items-start gap-4 mb-4">
+            <div className="w-16 h-16 rounded-full bg-[#F5F2ED] flex items-center justify-center text-[20px] font-semibold text-gray-700 flex-shrink-0">
+              {initials}
             </div>
-            <ConfidenceBadge confidence={person.confidence} />
-          </div>
-        </div>
-      </header>
-
-      <div className="flex">
-        {/* Dark Sidebar */}
-        <aside className="w-64 min-h-screen bg-gray-900 text-gray-100">
-          <div className="p-6">
-            <h2 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-4">
-              Navigation
-            </h2>
-            <nav className="space-y-2">
-              <Link
-                href="/"
-                className="block px-3 py-2 text-sm font-medium text-gray-300 hover:bg-gray-800 hover:text-white rounded-md transition-colors"
-              >
-                Dashboard
-              </Link>
-              <Link
-                href="/people"
-                className="block px-3 py-2 text-sm font-medium bg-gray-800 text-white rounded-md"
-              >
-                People
-              </Link>
-              <Link
-                href="/mysteries"
-                className="block px-3 py-2 text-sm font-medium text-gray-300 hover:bg-gray-800 hover:text-white rounded-md transition-colors"
-              >
-                Mysteries
-              </Link>
-            </nav>
-
-            <div className="mt-8">
-              <Link
-                href="/people"
-                className="block px-3 py-2 text-sm font-medium text-blue-400 hover:text-blue-300"
-              >
-                ← Back to People
-              </Link>
-            </div>
-          </div>
-        </aside>
-
-        {/* Main Content */}
-        <main className="flex-1 p-8 max-w-5xl">
-          {/* Open Questions Alert */}
-          {person.needs_review && (
-            <div className="bg-orange-50 border border-orange-200 rounded-lg p-4 mb-6">
-              <div className="flex items-start">
-                <div className="flex-shrink-0">
-                  <svg className="h-5 w-5 text-orange-400" viewBox="0 0 20 20" fill="currentColor">
-                    <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                  </svg>
-                </div>
-                <div className="ml-3">
-                  <h3 className="text-sm font-medium text-orange-800">Open Questions</h3>
-                  <p className="text-sm text-orange-700 mt-1">This person's record needs review</p>
-                </div>
+            <div className="flex-1">
+              <h1 className="text-[24px] font-semibold mb-1">{fullName}</h1>
+              {lifeDates && <p className="text-[13px] text-gray-600 mb-2">{lifeDates}</p>}
+              <div className="flex items-center gap-2 flex-wrap">
+                <ConfidenceBadge confidence={person.confidence} />
+                {person.ahnentafel && (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded bg-gray-100 text-gray-700 text-[11px] font-medium">
+                    Ahnentafel #{person.ahnentafel}
+                  </span>
+                )}
+                {person.brick_wall && (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded bg-[#FCEBEB] text-[#791F1F] text-[11px] font-medium">
+                    🧱 Brick Wall
+                  </span>
+                )}
               </div>
             </div>
-          )}
+          </div>
+        </div>
 
-          {/* Facts Section */}
-          <div className="bg-white rounded-lg shadow mb-6">
-            <div className="px-6 py-4 border-b border-gray-200">
-              <h2 className="text-lg font-semibold text-gray-900">Facts</h2>
-            </div>
-            <div className="p-6 space-y-4">
-              {/* Birth */}
-              <div className="flex items-start justify-between">
-                <div className="flex-1">
-                  <div className="text-sm font-medium text-gray-700">Birth</div>
-                  <div className="text-sm text-gray-900 mt-1">
+        {/* Facts Card */}
+        <div className="bg-[#FDFCFA] border border-[#D3D1C7] rounded-lg p-4 mb-4">
+          <h2 className="text-[15px] font-semibold mb-3">Facts</h2>
+          <div className="space-y-3">
+            {/* Birth */}
+            <div className="flex items-start justify-between">
+              <div className="flex-1">
+                <div className="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Birth</div>
+                {person.birth_year || person.birthplace_detail ? (
+                  <div className="text-[13px] text-gray-900 mt-1">
                     {person.birth_year && (
                       <div>
                         {person.birth_year_type === 'circa' && 'circa '}
@@ -201,19 +224,20 @@ export default async function PersonPage({ params }: PageProps) {
                     {person.birthplace_detail && (
                       <div className="text-gray-600">{person.birthplace_detail}</div>
                     )}
-                    {!person.birth_year && !person.birthplace_detail && (
-                      <div className="text-gray-400">Unknown</div>
-                    )}
                   </div>
-                </div>
-                {person.confidence && <ConfidenceBadge confidence={person.confidence} />}
+                ) : (
+                  <div className="text-[13px] text-gray-400 italic mt-1">Unknown</div>
+                )}
               </div>
+              <ConfidenceBadge confidence={person.confidence} size="small" />
+            </div>
 
-              {/* Death */}
-              <div className="flex items-start justify-between">
-                <div className="flex-1">
-                  <div className="text-sm font-medium text-gray-700">Death</div>
-                  <div className="text-sm text-gray-900 mt-1">
+            {/* Death */}
+            <div className="flex items-start justify-between">
+              <div className="flex-1">
+                <div className="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Death</div>
+                {person.death_year || person.death_place_detail ? (
+                  <div className="text-[13px] text-gray-900 mt-1">
                     {person.death_year && (
                       <div>
                         {person.death_year_type === 'circa' && 'circa '}
@@ -223,152 +247,226 @@ export default async function PersonPage({ params }: PageProps) {
                     {person.death_place_detail && (
                       <div className="text-gray-600">{person.death_place_detail}</div>
                     )}
-                    {!person.death_year && !person.death_place_detail && (
-                      <div className="text-gray-400">Unknown</div>
-                    )}
                   </div>
-                </div>
-                {person.confidence && <ConfidenceBadge confidence={person.confidence} />}
+                ) : (
+                  <div className="text-[13px] text-gray-400 italic mt-1">Unknown</div>
+                )}
               </div>
+              <ConfidenceBadge confidence={person.confidence} size="small" />
+            </div>
 
-              {/* Burial */}
-              {person.burial_place && (
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <div className="text-sm font-medium text-gray-700">Burial</div>
-                    <div className="text-sm text-gray-900 mt-1">{person.burial_place}</div>
-                    {person.burial_notes && (
-                      <div className="text-sm text-gray-600 mt-1">{person.burial_notes}</div>
-                    )}
+            {/* Burial */}
+            {person.burial_place && (
+              <div className="flex items-start justify-between">
+                <div className="flex-1">
+                  <div className="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Burial</div>
+                  <div className="text-[13px] text-gray-900 mt-1">{person.burial_place}</div>
+                  {person.burial_notes && (
+                    <div className="text-[13px] text-gray-600 mt-1">{person.burial_notes}</div>
+                  )}
+                </div>
+                <ConfidenceBadge confidence={person.confidence} size="small" />
+              </div>
+            )}
+
+            {/* Father */}
+            {father && (
+              <div className="flex items-start justify-between">
+                <div className="flex-1">
+                  <div className="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Father</div>
+                  <div className="text-[13px] text-gray-900 mt-1">
+                    <Link href={`/people/${father.id}`} className="text-[#EF9F27] hover:underline">
+                      {father.given_name} {father.surname}
+                    </Link>
                   </div>
-                  {person.confidence && <ConfidenceBadge confidence={person.confidence} />}
                 </div>
-              )}
-            </div>
-          </div>
+                <ConfidenceBadge confidence={father.confidence} size="small" />
+              </div>
+            )}
 
-          {/* Family Section */}
-          <div className="bg-white rounded-lg shadow mb-6">
-            <div className="px-6 py-4 border-b border-gray-200">
-              <h2 className="text-lg font-semibold text-gray-900">Family</h2>
-            </div>
-            <div className="p-6">
-              {parents.length === 0 && spouses.length === 0 && children.length === 0 && siblings.length === 0 ? (
-                <p className="text-sm text-gray-500">No family relationships recorded</p>
-              ) : (
-                <div className="space-y-4">
-                  {parents.length > 0 && (
-                    <div>
-                      <h3 className="text-sm font-medium text-gray-700 mb-2">Parents</h3>
-                      <div className="space-y-2">
-                        {parents.map(p => (
-                          <Link
-                            key={p.id}
-                            href={`/people/${p.id}`}
-                            className="block text-sm text-blue-600 hover:text-blue-800 hover:underline"
-                          >
-                            {p.given_name} {p.surname}
-                          </Link>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {spouses.length > 0 && (
-                    <div>
-                      <h3 className="text-sm font-medium text-gray-700 mb-2">Spouses</h3>
-                      <div className="space-y-2">
-                        {spouses.map(p => (
-                          <Link
-                            key={p.id}
-                            href={`/people/${p.id}`}
-                            className="block text-sm text-blue-600 hover:text-blue-800 hover:underline"
-                          >
-                            {p.given_name} {p.surname}
-                          </Link>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {children.length > 0 && (
-                    <div>
-                      <h3 className="text-sm font-medium text-gray-700 mb-2">Children</h3>
-                      <div className="space-y-2">
-                        {children.map(p => (
-                          <Link
-                            key={p.id}
-                            href={`/people/${p.id}`}
-                            className="block text-sm text-blue-600 hover:text-blue-800 hover:underline"
-                          >
-                            {p.given_name} {p.surname}
-                          </Link>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {siblings.length > 0 && (
-                    <div>
-                      <h3 className="text-sm font-medium text-gray-700 mb-2">Siblings</h3>
-                      <div className="space-y-2">
-                        {siblings.map(p => (
-                          <Link
-                            key={p.id}
-                            href={`/people/${p.id}`}
-                            className="block text-sm text-blue-600 hover:text-blue-800 hover:underline"
-                          >
-                            {p.given_name} {p.surname}
-                          </Link>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+            {/* Mother */}
+            {mother && (
+              <div className="flex items-start justify-between">
+                <div className="flex-1">
+                  <div className="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Mother</div>
+                  <div className="text-[13px] text-gray-900 mt-1">
+                    <Link href={`/people/${mother.id}`} className="text-[#EF9F27] hover:underline">
+                      {mother.given_name} {mother.surname}
+                    </Link>
+                  </div>
                 </div>
-              )}
-            </div>
+                <ConfidenceBadge confidence={mother.confidence} size="small" />
+              </div>
+            )}
           </div>
+        </div>
 
-          {/* Sources Section */}
-          <div className="bg-white rounded-lg shadow mb-6">
-            <div className="px-6 py-4 border-b border-gray-200">
-              <h2 className="text-lg font-semibold text-gray-900">Sources</h2>
-            </div>
-            <div className="p-6">
-              {sources.length === 0 ? (
-                <p className="text-sm text-gray-500">No sources recorded</p>
-              ) : (
-                <div className="space-y-3">
-                  {sources.map((source: any, idx: number) => (
-                    <div key={idx} className="text-sm">
-                      <div className="font-medium text-gray-900">{source.title}</div>
-                      {source.author && <div className="text-gray-600">Author: {source.author}</div>}
-                    </div>
+        {/* Family Card */}
+        <div className="bg-[#FDFCFA] border border-[#D3D1C7] rounded-lg p-4 mb-4">
+          <h2 className="text-[15px] font-semibold mb-3">Family</h2>
+
+          {/* Parents */}
+          {(father || mother) && (
+            <>
+              <div className="mb-2">
+                <div className="text-[11px] font-medium text-gray-500 uppercase tracking-wider mb-2">Parents</div>
+                <div className="grid grid-cols-2 gap-2">
+                  {father && <PersonCard person={father} />}
+                  {mother && <PersonCard person={mother} />}
+                </div>
+              </div>
+              <div className="h-4 w-px bg-[#D3D1C7] mx-auto"></div>
+            </>
+          )}
+
+          {/* Spouses */}
+          {spouses.length > 0 && (
+            <>
+              <div className="mb-2">
+                <div className="text-[11px] font-medium text-gray-500 uppercase tracking-wider mb-2">Spouses</div>
+                <div className="grid grid-cols-2 gap-2">
+                  {spouses.map(spouse => (
+                    <PersonCard key={spouse.id} person={spouse} />
                   ))}
                 </div>
-              )}
-            </div>
-          </div>
-
-          {/* Research Notes */}
-          {person.bio && (
-            <div className="bg-white rounded-lg shadow mb-6">
-              <div className="px-6 py-4 border-b border-gray-200">
-                <h2 className="text-lg font-semibold text-gray-900">Research Notes</h2>
               </div>
-              <div className="p-6">
-                <div className="text-sm text-gray-700 whitespace-pre-wrap">{person.bio}</div>
+              <div className="h-4 w-px bg-[#D3D1C7] mx-auto"></div>
+            </>
+          )}
+
+          {/* Children */}
+          {children.length > 0 && (
+            <div>
+              <div className="text-[11px] font-medium text-gray-500 uppercase tracking-wider mb-2">Children</div>
+              <div className="grid grid-cols-2 gap-2">
+                {children.map(child => (
+                  <PersonCard key={child.id} person={child} />
+                ))}
               </div>
             </div>
           )}
 
-          {/* Actions */}
-          <div className="bg-white rounded-lg shadow p-6">
-            <button className="px-4 py-2 bg-blue-600 text-white text-sm font-medium rounded-md hover:bg-blue-700 transition-colors">
-              Add to Mystery
-            </button>
+          {/* Siblings */}
+          {siblings.length > 0 && (
+            <div className="mt-4">
+              <div className="text-[11px] font-medium text-gray-500 uppercase tracking-wider mb-2">Siblings</div>
+              <div className="grid grid-cols-2 gap-2">
+                {siblings.map(sibling => (
+                  <PersonCard key={sibling.id} person={sibling} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {!father && !mother && spouses.length === 0 && children.length === 0 && siblings.length === 0 && (
+            <p className="text-[13px] text-gray-400 italic">No family relationships recorded</p>
+          )}
+        </div>
+
+        {/* Connected Mysteries */}
+        {mysteries.length > 0 && (
+          <div className="bg-[#FDFCFA] border border-[#D3D1C7] rounded-lg p-4 mb-4">
+            <h2 className="text-[15px] font-semibold mb-3">Connected Mysteries</h2>
+            <div className="space-y-2">
+              {mysteries.map(mystery => (
+                <Link
+                  key={mystery.id}
+                  href={`/mysteries/${mystery.id}`}
+                  className="block p-3 bg-[#FAEEDA] border border-[#EF9F27] rounded hover:bg-[#EF9F27]/20 transition-colors"
+                >
+                  <div className="text-[13px] font-medium text-gray-900">{mystery.title}</div>
+                  {mystery.core_question && (
+                    <div className="text-[11px] text-gray-600 mt-1">{mystery.core_question}</div>
+                  )}
+                </Link>
+              ))}
+            </div>
           </div>
-        </main>
+        )}
+
+        {/* Sources */}
+        <div className="bg-[#FDFCFA] border border-[#D3D1C7] rounded-lg p-4 mb-4">
+          <h2 className="text-[15px] font-semibold mb-3">Sources</h2>
+          <p className="text-[13px] text-gray-400 italic">No sources recorded</p>
+        </div>
+
+        {/* Research Notes */}
+        {person.bio && (
+          <div className="bg-[#FDFCFA] border border-[#D3D1C7] rounded-lg p-4 mb-4">
+            <h2 className="text-[15px] font-semibold mb-3">Research Notes</h2>
+            <div className="text-[13px] text-gray-700 whitespace-pre-wrap">{person.bio}</div>
+          </div>
+        )}
+
+        {/* Open Questions */}
+        {person.needs_review && (
+          <div className="bg-[#FDFCFA] border-l-2 border-[#EF9F27] rounded-lg p-4">
+            <h3 className="text-[13px] font-semibold text-[#633806] mb-2">Open Questions</h3>
+            <p className="text-[13px] text-gray-700">This person's record needs review and verification.</p>
+          </div>
+        )}
+      </div>
+
+      {/* Right Sidebar */}
+      <div className="w-[280px] border-l border-[#D3D1C7] p-4 overflow-y-auto bg-[#F5F2ED]">
+        <div className="space-y-4">
+          {/* Research Status */}
+          <div>
+            <h3 className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-2">
+              Research Status
+            </h3>
+            <div className="space-y-1 text-[11px]">
+              <div className="flex justify-between">
+                <span className="text-gray-600">Confidence</span>
+                <span className="font-medium">{person.confidence || 'Not set'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-600">Brick Wall</span>
+                <span className="font-medium">{person.brick_wall ? 'Yes' : 'No'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-600">Needs Review</span>
+                <span className="font-medium">{person.needs_review ? 'Yes' : 'No'}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Actions */}
+          <div>
+            <h3 className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-2">
+              Actions
+            </h3>
+            <div className="space-y-2">
+              <button className="w-full px-3 py-2 bg-[#EF9F27] text-white rounded text-[11px] font-medium hover:bg-[#d88d1f] transition-colors">
+                Ask Hermes
+              </button>
+              <button className="w-full px-3 py-2 bg-white border border-[#D3D1C7] rounded text-[11px] font-medium hover:border-[#EF9F27] transition-colors">
+                Link to Mystery
+              </button>
+              <button className="w-full px-3 py-2 bg-white border border-[#D3D1C7] rounded text-[11px] font-medium hover:border-[#EF9F27] transition-colors">
+                Upload Document
+              </button>
+              <button className="w-full px-3 py-2 bg-white border border-[#D3D1C7] rounded text-[11px] font-medium hover:border-[#EF9F27] transition-colors">
+                Edit Facts
+              </button>
+            </div>
+          </div>
+
+          {/* Wiki Info */}
+          <div>
+            <h3 className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-2">
+              Wiki Page
+            </h3>
+            <div className="text-[11px] text-gray-600">
+              <div className="mb-1">
+                <span className="font-mono text-[10px]">
+                  people/{person.surname?.toLowerCase()}-{person.given_name?.toLowerCase()}.md
+                </span>
+              </div>
+              <div className="text-gray-400">Last sync: Never</div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   )
