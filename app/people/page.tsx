@@ -3,40 +3,24 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { supabase } from '@/lib/supabase'
-import { Person } from '@/lib/types'
-import PersonForm from '@/app/components/PersonForm'
+import { getPeople } from '@/lib/gramps'
+import { GrampsPerson } from '@/lib/types'
 
-function ConfidenceBadge({ confidence }: { confidence?: string }) {
-  const styles = {
-    confirmed: 'bg-[#EAF3DE] text-[#27500A]',
-    probable: 'bg-[#E6F1FB] text-[#0C447C]',
-    possible: 'bg-[#FAEEDA] text-[#633806]',
-    hypothetical: 'bg-[#F1EFE8] text-[#5F5E5A]',
-    contradicted: 'bg-[#FCEBEB] text-[#791F1F]',
-  }
-
-  const style = styles[confidence as keyof typeof styles] || 'bg-[#F1EFE8] text-[#5F5E5A]'
-
-  return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium ${style}`}>
-      {confidence || 'not set'}
-    </span>
-  )
+interface PersonDisplay {
+  id: string
+  gramps_id: string
+  given_name: string
+  surname: string
+  full_name: string
 }
 
 export default function PeoplePage() {
   const router = useRouter()
-  const [people, setPeople] = useState<Person[]>([])
-  const [filteredPeople, setFilteredPeople] = useState<Person[]>([])
-  const [totalCount, setTotalCount] = useState(0)
+  const [people, setPeople] = useState<PersonDisplay[]>([])
+  const [filteredPeople, setFilteredPeople] = useState<PersonDisplay[]>([])
   const [searchTerm, setSearchTerm] = useState('')
-  const [confidenceFilter, setConfidenceFilter] = useState<string>('all')
-  const [brickWallFilter, setBrickWallFilter] = useState(false)
   const [currentPage, setCurrentPage] = useState(1)
   const [isLoading, setIsLoading] = useState(true)
-  const [showNewPersonModal, setShowNewPersonModal] = useState(false)
-  const [isSubmitting, setIsSubmitting] = useState(false)
 
   const itemsPerPage = 50
 
@@ -46,28 +30,30 @@ export default function PeoplePage() {
 
   useEffect(() => {
     applyFilters()
-  }, [people, searchTerm, confidenceFilter, brickWallFilter])
+  }, [people, searchTerm])
 
   async function fetchPeople() {
     setIsLoading(true)
+    try {
+      const grampsPeople = await getPeople()
 
-    // Get total count
-    const { count } = await supabase
-      .from('people')
-      .select('*', { count: 'exact', head: true })
+      const mapped: PersonDisplay[] = grampsPeople.map((p: GrampsPerson) => ({
+        id: p.handle,
+        gramps_id: p.gramps_id,
+        given_name: p.primary_name.first_name || '',
+        surname: p.primary_name.surname_list?.[0]?.surname || '',
+        full_name: `${p.primary_name.first_name || ''} ${p.primary_name.surname_list?.[0]?.surname || ''}`.trim(),
+      }))
 
-    setTotalCount(count || 0)
+      // Sort by surname
+      mapped.sort((a, b) => a.surname.localeCompare(b.surname))
 
-    // Get all people data
-    const { data, error } = await supabase
-      .from('people')
-      .select('*')
-      .order('surname', { ascending: true })
-
-    if (data) {
-      setPeople(data)
+      setPeople(mapped)
+    } catch (error) {
+      console.error('Error fetching people from Gramps:', error)
+    } finally {
+      setIsLoading(false)
     }
-    setIsLoading(false)
   }
 
   function applyFilters() {
@@ -76,45 +62,13 @@ export default function PeoplePage() {
     // Search filter
     if (searchTerm) {
       const term = searchTerm.toLowerCase()
-      filtered = filtered.filter(person => {
-        const fullName = `${person.given_name || ''} ${person.surname || ''}`.toLowerCase()
-        return fullName.includes(term)
-      })
-    }
-
-    // Confidence filter
-    if (confidenceFilter !== 'all') {
-      filtered = filtered.filter(person => person.confidence === confidenceFilter)
-    }
-
-    // Brick wall filter
-    if (brickWallFilter) {
-      filtered = filtered.filter(person => person.brick_wall === true)
+      filtered = filtered.filter(person =>
+        person.full_name.toLowerCase().includes(term)
+      )
     }
 
     setFilteredPeople(filtered)
     setCurrentPage(1)
-  }
-
-  async function handleCreatePerson(data: any) {
-    setIsSubmitting(true)
-    try {
-      const response = await fetch('/api/people', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-      })
-
-      const result = await response.json()
-      if (result.success && result.person) {
-        setShowNewPersonModal(false)
-        router.push(`/people/${result.person.id}`)
-      }
-    } catch (error) {
-      console.error('Error creating person:', error)
-    } finally {
-      setIsSubmitting(false)
-    }
   }
 
   const totalPages = Math.ceil(filteredPeople.length / itemsPerPage)
@@ -128,33 +82,17 @@ export default function PeoplePage() {
       <div className="mb-6">
         <div className="flex items-center justify-between mb-1">
           <h1 className="text-[20px] font-semibold">People</h1>
-          <button
-            onClick={() => setShowNewPersonModal(true)}
+          <a
+            href="http://178.156.250.119"
+            target="_blank"
+            rel="noopener noreferrer"
             className="px-3 py-1.5 bg-[#EF9F27] text-white text-[13px] font-medium rounded hover:bg-[#D88E1F] transition-colors"
           >
-            New Person
-          </button>
+            Open in Gramps Web ↗
+          </a>
         </div>
-        <p className="text-[13px] text-gray-600">{totalCount.toLocaleString()} individuals in database</p>
+        <p className="text-[13px] text-gray-600">{people.length.toLocaleString()} individuals from Gramps</p>
       </div>
-
-      {/* New Person Modal */}
-      {showNewPersonModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-[#FDFCFA] rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto border border-[#D3D1C7]">
-            <div className="p-6 border-b border-[#D3D1C7]">
-              <h2 className="text-[18px] font-semibold">New Person</h2>
-            </div>
-            <div className="p-6">
-              <PersonForm
-                onSubmit={handleCreatePerson}
-                onCancel={() => setShowNewPersonModal(false)}
-                isLoading={isSubmitting}
-              />
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Filters */}
       <div className="bg-[#FDFCFA] border border-[#D3D1C7] rounded-lg p-4 mb-4">
@@ -172,40 +110,6 @@ export default function PeoplePage() {
               className="w-full px-3 py-1.5 border border-[#D3D1C7] rounded text-[13px] focus:outline-none focus:border-[#EF9F27]"
             />
           </div>
-
-          {/* Confidence Filter */}
-          <div>
-            <label className="block text-[11px] font-medium text-gray-700 mb-1.5">
-              Confidence Level
-            </label>
-            <select
-              value={confidenceFilter}
-              onChange={(e) => setConfidenceFilter(e.target.value)}
-              className="w-full px-3 py-1.5 border border-[#D3D1C7] rounded text-[13px] focus:outline-none focus:border-[#EF9F27]"
-            >
-              <option value="all">All Levels</option>
-              <option value="confirmed">Confirmed</option>
-              <option value="probable">Probable</option>
-              <option value="possible">Possible</option>
-              <option value="hypothetical">Hypothetical</option>
-            </select>
-          </div>
-
-          {/* Brick Wall Toggle */}
-          <div>
-            <label className="block text-[11px] font-medium text-gray-700 mb-1.5">
-              Filters
-            </label>
-            <label className="flex items-center cursor-pointer mt-2">
-              <input
-                type="checkbox"
-                checked={brickWallFilter}
-                onChange={(e) => setBrickWallFilter(e.target.checked)}
-                className="h-3.5 w-3.5 text-[#EF9F27] focus:ring-[#EF9F27] border-[#D3D1C7] rounded"
-              />
-              <span className="ml-2 text-[13px] text-gray-700">Brick Walls Only</span>
-            </label>
-          </div>
         </div>
 
         {/* Count Display */}
@@ -220,7 +124,7 @@ export default function PeoplePage() {
       {/* Table */}
       <div className="bg-[#FDFCFA] border border-[#D3D1C7] rounded-lg overflow-hidden">
         {isLoading ? (
-          <div className="p-8 text-center text-gray-500 text-[13px]">Loading...</div>
+          <div className="p-8 text-center text-gray-500 text-[13px]">Loading from Gramps...</div>
         ) : currentPeople.length === 0 ? (
           <div className="p-8 text-center text-gray-500 text-[13px]">No people found</div>
         ) : (
@@ -233,19 +137,7 @@ export default function PeoplePage() {
                       Name
                     </th>
                     <th className="px-4 py-2.5 text-left text-[10px] font-semibold text-gray-600 uppercase tracking-wider">
-                      Birth Year
-                    </th>
-                    <th className="px-4 py-2.5 text-left text-[10px] font-semibold text-gray-600 uppercase tracking-wider">
-                      Birth Place
-                    </th>
-                    <th className="px-4 py-2.5 text-left text-[10px] font-semibold text-gray-600 uppercase tracking-wider">
-                      Death Year
-                    </th>
-                    <th className="px-4 py-2.5 text-left text-[10px] font-semibold text-gray-600 uppercase tracking-wider">
-                      Confidence
-                    </th>
-                    <th className="px-4 py-2.5 text-left text-[10px] font-semibold text-gray-600 uppercase tracking-wider">
-                      Ahnentafel
+                      Gramps ID
                     </th>
                   </tr>
                 </thead>
@@ -254,35 +146,17 @@ export default function PeoplePage() {
                     <tr
                       key={person.id}
                       className="hover:bg-[#F5F2ED] cursor-pointer transition-colors"
-                      onClick={() => window.location.href = `/people/${person.id}`}
+                      onClick={() => router.push(`/people/${person.id}`)}
                     >
                       <td className="px-4 py-3 whitespace-nowrap">
                         <div className="text-[13px] font-medium text-gray-900">
-                          {person.given_name} {person.surname}
+                          {person.full_name}
                         </div>
                       </td>
-                      <td className="px-4 py-3 whitespace-nowrap text-[13px] text-gray-600">
-                        {person.birth_year || '-'}
-                      </td>
-                      <td className="px-4 py-3 text-[13px] text-gray-600">
-                        <div className="max-w-xs truncate">
-                          {person.birthplace_detail || '-'}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 whitespace-nowrap text-[13px] text-gray-600">
-                        {person.death_year || '-'}
-                      </td>
                       <td className="px-4 py-3 whitespace-nowrap">
-                        <ConfidenceBadge confidence={person.confidence} />
-                      </td>
-                      <td className="px-4 py-3 whitespace-nowrap">
-                        {person.ahnentafel ? (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded bg-gray-100 text-gray-700 text-[11px] font-medium">
-                            #{person.ahnentafel}
-                          </span>
-                        ) : (
-                          <span className="text-[13px] text-gray-400">-</span>
-                        )}
+                        <span className="inline-flex items-center px-2 py-0.5 rounded bg-gray-100 text-gray-700 text-[11px] font-medium font-mono">
+                          {person.gramps_id}
+                        </span>
                       </td>
                     </tr>
                   ))}
