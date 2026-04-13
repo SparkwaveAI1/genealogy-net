@@ -7,10 +7,8 @@ export async function GET(request: Request) {
     const search = searchParams.get('search')
 
     const people = await getPeople(search || undefined)
+    console.log('Raw Gramps people response:', JSON.stringify(people.slice(0, 2), null, 2))
     console.log('API route returning', people.length, 'people')
-    if (people.length > 0) {
-      console.log('First person sample:', JSON.stringify(people[0], null, 2))
-    }
     return NextResponse.json(people)
   } catch (error) {
     console.error('Error fetching people from Gramps:', error)
