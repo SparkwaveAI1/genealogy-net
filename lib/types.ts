@@ -122,3 +122,49 @@ export interface DnaMatch {
   created_at?: string
   updated_at?: string
 }
+
+// Gramps Web API Types
+export interface GrampsPerson {
+  gramps_id: string
+  handle: string
+  primary_name: {
+    first_name: string
+    surname_list: Array<{ surname: string }>
+  }
+  birth_ref_index?: number
+  death_ref_index?: number
+  event_ref_list?: Array<{
+    ref: string
+    role: string
+  }>
+  family_list?: string[]
+  parent_family_list?: string[]
+}
+
+export interface GrampsEvent {
+  gramps_id: string
+  handle: string
+  type: {
+    string: string
+  }
+  date?: {
+    modifier: number
+    quality: number
+    dateval: [number, number, number] | [number, number, number, boolean, number, number, number]
+    text: string
+  }
+  place?: {
+    ref: string
+  }
+  description?: string
+}
+
+export interface GrampsFamily {
+  gramps_id: string
+  handle: string
+  father_handle?: string
+  mother_handle?: string
+  child_ref_list?: Array<{
+    ref: string
+  }>
+}
