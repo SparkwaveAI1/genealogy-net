@@ -51,8 +51,10 @@ async function getToken(): Promise<string> {
  */
 async function grampsRequest<T>(endpoint: string, options?: RequestInit): Promise<T> {
   const token = await getToken()
+  const url = `${GRAMPS_API_URL}${endpoint}`
+  console.log('grampsRequest URL:', url)
 
-  const response = await fetch(`${GRAMPS_API_URL}${endpoint}`, {
+  const response = await fetch(url, {
     ...options,
     headers: {
       'Authorization': `Bearer ${token}`,
@@ -60,6 +62,8 @@ async function grampsRequest<T>(endpoint: string, options?: RequestInit): Promis
       ...options?.headers,
     },
   })
+
+  console.log('grampsRequest response status:', response.status, response.statusText)
 
   if (!response.ok) {
     throw new Error(`Gramps API error: ${response.statusText}`)
@@ -80,7 +84,10 @@ export async function getPeople(search?: string): Promise<GrampsPerson[]> {
  * Get single person by Gramps ID or handle
  */
 export async function getPerson(grampsId: string): Promise<GrampsPerson> {
-  return grampsRequest<GrampsPerson>(`/people/${grampsId}/`)
+  console.log('getPerson called with:', grampsId)
+  const result = await grampsRequest<GrampsPerson>(`/people/${grampsId}/`)
+  console.log('Gramps API returned person:', JSON.stringify(result, null, 2))
+  return result
 }
 
 /**

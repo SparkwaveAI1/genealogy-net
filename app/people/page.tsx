@@ -40,13 +40,16 @@ export default function PeoplePage() {
       }
       const grampsPeople: GrampsPerson[] = await response.json()
 
-      const mapped: PersonDisplay[] = grampsPeople.map((p: GrampsPerson) => ({
-        id: p.handle,
-        gramps_id: p.gramps_id,
-        given_name: p.primary_name.first_name || '',
-        surname: p.primary_name.surname_list?.[0]?.surname || '',
-        full_name: `${p.primary_name.first_name || ''} ${p.primary_name.surname_list?.[0]?.surname || ''}`.trim(),
-      }))
+      const mapped: PersonDisplay[] = grampsPeople.map((p: GrampsPerson) => {
+        console.log('Person handle:', p.handle, 'gramps_id:', p.gramps_id)
+        return {
+          id: p.handle,
+          gramps_id: p.gramps_id,
+          given_name: p.primary_name.first_name || '',
+          surname: p.primary_name.surname_list?.[0]?.surname || '',
+          full_name: `${p.primary_name.first_name || ''} ${p.primary_name.surname_list?.[0]?.surname || ''}`.trim(),
+        }
+      })
 
       // Sort by surname
       mapped.sort((a, b) => a.surname.localeCompare(b.surname))

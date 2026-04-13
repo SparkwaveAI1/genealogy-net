@@ -40,11 +40,13 @@ interface PageProps {
 
 export default async function PersonPage({ params }: PageProps) {
   const { id } = await params
+  console.log('Person page id param:', id)
 
   // Fetch from Gramps directly (server-side)
   let person: GrampsPerson
   try {
     person = await getPerson(id)
+    console.log('getPerson returned:', JSON.stringify(person, null, 2))
   } catch (error) {
     console.error('Error fetching person from Gramps:', error)
     notFound()
