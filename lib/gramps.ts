@@ -66,7 +66,9 @@ async function grampsRequest<T>(endpoint: string, options?: RequestInit): Promis
   console.log('grampsRequest response status:', response.status, response.statusText)
 
   if (!response.ok) {
-    throw new Error(`Gramps API error: ${response.statusText}`)
+    const errorText = await response.text()
+    console.error('Gramps API error:', response.status, errorText)
+    throw new Error(`Gramps API error: ${response.status} ${errorText}`)
   }
 
   return response.json()
@@ -85,6 +87,7 @@ export async function getPeople(search?: string): Promise<GrampsPerson[]> {
  */
 export async function getPerson(grampsId: string): Promise<GrampsPerson> {
   console.log('getPerson called with:', grampsId)
+  console.log('Full URL:', `${GRAMPS_API_URL}/people/${grampsId}/`)
   const result = await grampsRequest<GrampsPerson>(`/people/${grampsId}/`)
   console.log('Gramps API returned person:', JSON.stringify(result, null, 2))
   return result
