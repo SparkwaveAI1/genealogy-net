@@ -1,79 +1,33 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
+import { getPerson, getPersonParents, getPersonChildren, getPersonSpouses, getPersonSiblings, getPersonBirthYear, getPersonDeathYear } from '@/lib/gramps'
+import { GrampsPerson } from '@/lib/types'
 import { createServerSupabaseClient } from '@/lib/supabase-server'
-import { Person } from '@/lib/types'
-import { EditFactsButton, AddRelationshipButton } from './ActionButtons'
 
-function getInitials(person: Person): string {
-  const first = person.given_name?.charAt(0) || ''
-  const last = person.surname?.charAt(0) || ''
+function getInitials(person: GrampsPerson): string {
+  const first = person.primary_name.first_name?.charAt(0) || ''
+  const last = person.primary_name.surname_list?.[0]?.surname?.charAt(0) || ''
   return (first + last).toUpperCase() || '?'
 }
 
-function ConfidenceBadge({ confidence, size = 'normal' }: { confidence?: string; size?: 'normal' | 'small' }) {
-  const styles = {
-    confirmed: 'bg-[#EAF3DE] text-[#27500A]',
-    probable: 'bg-[#E6F1FB] text-[#0C447C]',
-    possible: 'bg-[#FAEEDA] text-[#633806]',
-    hypothetical: 'bg-[#F1EFE8] text-[#5F5E5A]',
-    contradicted: 'bg-[#FCEBEB] text-[#791F1F]',
-  }
-
-  const style = styles[confidence as keyof typeof styles] || 'bg-[#F1EFE8] text-[#5F5E5A]'
-  const sizeClass = size === 'small' ? 'px-1.5 py-0.5 text-[10px]' : 'px-2 py-0.5 text-[11px]'
-
-  return (
-    <span className={`inline-flex items-center rounded font-medium ${style} ${sizeClass}`}>
-      {confidence || 'not set'}
-    </span>
-  )
-}
-
-function ConfidenceDot({ confidence }: { confidence?: string }) {
-  const colors = {
-    confirmed: 'bg-[#27500A]',
-    probable: 'bg-[#0C447C]',
-    possible: 'bg-[#633806]',
-    hypothetical: 'bg-[#5F5E5A]',
-    contradicted: 'bg-[#791F1F]',
-  }
-
-  const color = colors[confidence as keyof typeof colors] || 'bg-[#5F5E5A]'
-
-  return <div className={`w-2 h-2 rounded-full ${color}`} />
-}
-
-function PersonCard({ person, showDates = true }: { person: Person; showDates?: boolean }) {
+function PersonCard({ person }: { person: GrampsPerson }) {
   const initials = getInitials(person)
-  const isDashed = person.confidence === 'hypothetical'
+  const fullName = `${person.primary_name.first_name || ''} ${person.primary_name.surname_list?.[0]?.surname || ''}`.trim()
 
   return (
     <Link
-      href={`/people/${person.id}`}
-      className={`block bg-[#FDFCFA] border ${isDashed ? 'border-dashed' : 'border-solid'} border-[#D3D1C7] rounded p-3 hover:border-[#EF9F27] transition-colors`}
+      href={`/people/${person.handle}`}
+      className="block bg-[#FDFCFA] border border-[#D3D1C7] rounded p-3 hover:border-[#EF9F27] transition-colors"
     >
       <div className="flex items-start gap-2">
         <div className="w-8 h-8 rounded-full bg-[#F5F2ED] flex items-center justify-center text-[11px] font-semibold text-gray-700 flex-shrink-0">
           {initials}
         </div>
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="text-[13px] font-medium text-gray-900 truncate">
-              {person.given_name} {person.surname}
-            </span>
-            <ConfidenceDot confidence={person.confidence} />
-          </div>
-          {showDates && (person.birth_year || person.death_year) && (
-            <div className="text-[11px] text-gray-500 mt-0.5">
-              {person.birth_year && person.death_year
-                ? `${person.birth_year}–${person.death_year}`
-                : person.birth_year
-                ? `b. ${person.birth_year}`
-                : person.death_year
-                ? `d. ${person.death_year}`
-                : ''}
-            </div>
-          )}
+          <span className="text-[13px] font-medium text-gray-900 truncate block">
+            {fullName}
+          </span>
+          <span className="text-[10px] text-gray-500 font-mono">{person.gramps_id}</span>
         </div>
       </div>
     </Link>
@@ -81,153 +35,67 @@ function PersonCard({ person, showDates = true }: { person: Person; showDates?: 
 }
 
 interface PageProps {
-  params: { id: string }
+  params: Promise<{ id: string }>
 }
 
 export default async function PersonPage({ params }: PageProps) {
   const { id } = await params
-  const supabase = createServerSupabaseClient()
 
-  // Fetch person
-  const { data: person, error } = await supabase
-    .from('people')
-    .select('*')
-    .eq('id', id)
-    .single()
-
-  if (error || !person) {
+  // Fetch from Gramps
+  let person: GrampsPerson
+  try {
+    person = await getPerson(id)
+  } catch (error) {
+    console.error('Error fetching person from Gramps:', error)
     notFound()
   }
 
-  // PARENTS - fetch via father_id and mother_id
-  let father: Person | null = null
-  let mother: Person | null = null
+  // Fetch family relationships from Gramps
+  const { father, mother } = await getPersonParents(id)
+  const children = await getPersonChildren(id)
+  const spouses = await getPersonSpouses(id)
+  const siblings = await getPersonSiblings(id)
 
-  if (person.father_id) {
-    const { data } = await supabase
-      .from('people')
-      .select('id, given_name, surname, birth_year, death_year, confidence, ahnentafel')
-      .eq('id', person.father_id)
-      .maybeSingle()
-    father = data
-  }
+  // Get birth/death years (async, may be slow)
+  const birthYear = await getPersonBirthYear(person)
+  const deathYear = await getPersonDeathYear(person)
 
-  if (person.mother_id) {
-    const { data } = await supabase
-      .from('people')
-      .select('id, given_name, surname, birth_year, death_year, confidence, ahnentafel')
-      .eq('id', person.mother_id)
-      .maybeSingle()
-    mother = data
-  }
-
-  // CHILDREN - anyone with this person as father or mother
-  const { data: childrenData } = await supabase
+  // Optional: Check Supabase for supplementary data (confidence, brick_wall, mysteries)
+  const supabase = createServerSupabaseClient()
+  let supabaseData: any = null
+  const { data } = await supabase
     .from('people')
-    .select('id, given_name, surname, birth_year, death_year, confidence, ahnentafel')
-    .or(`father_id.eq.${id},mother_id.eq.${id}`)
-    .order('birth_year', { ascending: true, nullsFirst: false })
+    .select('confidence, brick_wall, needs_review, bio')
+    .eq('id', person.gramps_id)
+    .maybeSingle()
 
-  const children = childrenData || []
-
-  // SIBLINGS - build from paternal and maternal queries
-  const paternalSiblings: Person[] = []
-  const maternalSiblings: Person[] = []
-
-  if (person.father_id) {
-    const { data } = await supabase
-      .from('people')
-      .select('id, given_name, surname, birth_year, death_year, confidence, ahnentafel, father_id, mother_id')
-      .eq('father_id', person.father_id)
-      .neq('id', id)
-    if (data) paternalSiblings.push(...data)
+  if (data) {
+    supabaseData = data
   }
 
-  if (person.mother_id) {
-    const { data } = await supabase
-      .from('people')
-      .select('id, given_name, surname, birth_year, death_year, confidence, ahnentafel, father_id, mother_id')
-      .eq('mother_id', person.mother_id)
-      .neq('id', id)
-    if (data) maternalSiblings.push(...data)
-  }
-
-  // Classify siblings (full vs half) and deduplicate
-  const siblingMap = new Map<string, { person: Person; type: 'full' | 'paternal-half' | 'maternal-half' }>()
-
-  paternalSiblings.forEach(sib => {
-    const inMaternal = maternalSiblings.some(m => m.id === sib.id)
-    const type = inMaternal ? 'full' : 'paternal-half'
-    siblingMap.set(sib.id, { person: sib, type })
-  })
-
-  maternalSiblings.forEach(sib => {
-    if (!siblingMap.has(sib.id)) {
-      siblingMap.set(sib.id, { person: sib, type: 'maternal-half' })
-    }
-  })
-
-  // Separate and sort siblings
-  const fullSiblings = Array.from(siblingMap.values())
-    .filter(s => s.type === 'full')
-    .map(s => s.person)
-    .sort((a, b) => (a.birth_year || 9999) - (b.birth_year || 9999))
-
-  const paternalHalfSiblings = Array.from(siblingMap.values())
-    .filter(s => s.type === 'paternal-half')
-    .map(s => s.person)
-    .sort((a, b) => (a.birth_year || 9999) - (b.birth_year || 9999))
-
-  const maternalHalfSiblings = Array.from(siblingMap.values())
-    .filter(s => s.type === 'maternal-half')
-    .map(s => s.person)
-    .sort((a, b) => (a.birth_year || 9999) - (b.birth_year || 9999))
-
-  // SPOUSES - still use family_relationships table
-  const { data: spouseRels } = await supabase
-    .from('family_relationships')
-    .select('person_id, related_person_id')
-    .or(`person_id.eq.${id},related_person_id.eq.${id}`)
-    .eq('relationship_type', 'spouse')
-
-  const spouseIds = new Set<string>()
-  spouseRels?.forEach(rel => {
-    const spouseId = rel.person_id === id ? rel.related_person_id : rel.person_id
-    spouseIds.add(spouseId)
-  })
-
-  let spouses: Person[] = []
-  if (spouseIds.size > 0) {
-    const { data } = await supabase
-      .from('people')
-      .select('id, given_name, surname, birth_year, death_year, confidence, ahnentafel')
-      .in('id', Array.from(spouseIds))
-    spouses = data || []
-  }
-
-  // Fetch connected mysteries
+  // Fetch connected mysteries (Supabase only)
   const { data: mysteryConnections } = await supabase
     .from('mystery_people')
     .select('mystery_id')
-    .eq('person_id', id)
+    .eq('person_id', person.gramps_id)
 
   let mysteries: any[] = []
   if (mysteryConnections && mysteryConnections.length > 0) {
     const mysteryIds = mysteryConnections.map(mc => mc.mystery_id)
-    const { data } = await supabase
+    const { data: mysteriesData } = await supabase
       .from('mysteries')
       .select('*')
       .in('id', mysteryIds)
-    mysteries = data || []
+    mysteries = mysteriesData || []
   }
 
-  const fullName = [person.given_name, person.surname].filter(Boolean).join(' ') || 'Unknown Name'
-  const lifeDates = person.birth_year && person.death_year
-    ? `${person.birth_year}–${person.death_year}`
-    : person.birth_year
-    ? `b. ${person.birth_year}`
-    : person.death_year
-    ? `d. ${person.death_year}`
+  const fullName = `${person.primary_name.first_name || ''} ${person.primary_name.surname_list?.[0]?.surname || ''}`.trim() || 'Unknown Name'
+  const lifeDates = birthYear && deathYear
+    ? `${birthYear}–${deathYear}`
+    : birthYear
+    ? `b. ${birthYear}`
+    : deathYear
+    ? `d. ${deathYear}`
     : ''
 
   const initials = getInitials(person)
@@ -246,13 +114,10 @@ export default async function PersonPage({ params }: PageProps) {
               <h1 className="text-[24px] font-semibold mb-1">{fullName}</h1>
               {lifeDates && <p className="text-[13px] text-gray-600 mb-2">{lifeDates}</p>}
               <div className="flex items-center gap-2 flex-wrap">
-                <ConfidenceBadge confidence={person.confidence} />
-                {person.ahnentafel && (
-                  <span className="inline-flex items-center px-2 py-0.5 rounded bg-gray-100 text-gray-700 text-[11px] font-medium">
-                    Ahnentafel #{person.ahnentafel}
-                  </span>
-                )}
-                {person.brick_wall && (
+                <span className="inline-flex items-center px-2 py-0.5 rounded bg-gray-100 text-gray-700 text-[11px] font-medium font-mono">
+                  {person.gramps_id}
+                </span>
+                {supabaseData?.brick_wall && (
                   <span className="inline-flex items-center px-2 py-0.5 rounded bg-[#FCEBEB] text-[#791F1F] text-[11px] font-medium">
                     🧱 Brick Wall
                   </span>
@@ -260,102 +125,16 @@ export default async function PersonPage({ params }: PageProps) {
               </div>
             </div>
           </div>
-        </div>
 
-        {/* Facts Card */}
-        <div className="bg-[#FDFCFA] border border-[#D3D1C7] rounded-lg p-4 mb-4">
-          <h2 className="text-[15px] font-semibold mb-3">Facts</h2>
-          <div className="space-y-3">
-            {/* Birth */}
-            <div className="flex items-start justify-between">
-              <div className="flex-1">
-                <div className="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Birth</div>
-                {person.birth_year || person.birthplace_detail ? (
-                  <div className="text-[13px] text-gray-900 mt-1">
-                    {person.birth_year && (
-                      <div>
-                        {person.birth_year_type === 'circa' && 'circa '}
-                        {person.birth_year}
-                      </div>
-                    )}
-                    {person.birthplace_detail && (
-                      <div className="text-gray-600">{person.birthplace_detail}</div>
-                    )}
-                  </div>
-                ) : (
-                  <div className="text-[13px] text-gray-400 italic mt-1">Unknown</div>
-                )}
-              </div>
-              <ConfidenceBadge confidence={person.birth_date_confidence} size="small" />
-            </div>
-
-            {/* Death */}
-            <div className="flex items-start justify-between">
-              <div className="flex-1">
-                <div className="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Death</div>
-                {person.death_year || person.death_place_detail ? (
-                  <div className="text-[13px] text-gray-900 mt-1">
-                    {person.death_year && (
-                      <div>
-                        {person.death_year_type === 'circa' && 'circa '}
-                        {person.death_year}
-                      </div>
-                    )}
-                    {person.death_place_detail && (
-                      <div className="text-gray-600">{person.death_place_detail}</div>
-                    )}
-                  </div>
-                ) : (
-                  <div className="text-[13px] text-gray-400 italic mt-1">Unknown</div>
-                )}
-              </div>
-              <ConfidenceBadge confidence={person.death_date_confidence} size="small" />
-            </div>
-
-            {/* Burial */}
-            {person.burial_place && (
-              <div className="flex items-start justify-between">
-                <div className="flex-1">
-                  <div className="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Burial</div>
-                  <div className="text-[13px] text-gray-900 mt-1">{person.burial_place}</div>
-                  {person.burial_notes && (
-                    <div className="text-[13px] text-gray-600 mt-1">{person.burial_notes}</div>
-                  )}
-                </div>
-                <ConfidenceBadge confidence={person.confidence} size="small" />
-              </div>
-            )}
-
-            {/* Father */}
-            {father !== null && (
-              <div className="flex items-start justify-between">
-                <div className="flex-1">
-                  <div className="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Father</div>
-                  <div className="text-[13px] text-gray-900 mt-1">
-                    <Link href={`/people/${(father as Person).id}`} className="text-[#EF9F27] hover:underline">
-                      {(father as Person).given_name} {(father as Person).surname}
-                    </Link>
-                  </div>
-                </div>
-                <ConfidenceBadge confidence={(father as Person).confidence} size="small" />
-              </div>
-            )}
-
-            {/* Mother */}
-            {mother !== null && (
-              <div className="flex items-start justify-between">
-                <div className="flex-1">
-                  <div className="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Mother</div>
-                  <div className="text-[13px] text-gray-900 mt-1">
-                    <Link href={`/people/${(mother as Person).id}`} className="text-[#EF9F27] hover:underline">
-                      {(mother as Person).given_name} {(mother as Person).surname}
-                    </Link>
-                  </div>
-                </div>
-                <ConfidenceBadge confidence={(mother as Person).confidence} size="small" />
-              </div>
-            )}
-          </div>
+          {/* View in Gramps Web Button */}
+          <a
+            href={`http://178.156.250.119/person/${person.gramps_id}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center px-4 py-2 bg-[#EF9F27] text-white text-[13px] font-medium rounded hover:bg-[#D88E1F] transition-colors"
+          >
+            View in Gramps Web ↗
+          </a>
         </div>
 
         {/* Family Card */}
@@ -366,7 +145,6 @@ export default async function PersonPage({ params }: PageProps) {
           <div className="mb-2">
             <div className="flex items-center justify-between mb-2">
               <div className="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Parents</div>
-              <AddRelationshipButton type="parent" personId={id} />
             </div>
             {(father || mother) ? (
               <div className="grid grid-cols-2 gap-2">
@@ -383,12 +161,11 @@ export default async function PersonPage({ params }: PageProps) {
           <div className="mb-2">
             <div className="flex items-center justify-between mb-2">
               <div className="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Spouses</div>
-              <AddRelationshipButton type="spouse" personId={id} />
             </div>
             {spouses.length > 0 ? (
               <div className="grid grid-cols-2 gap-2">
                 {spouses.map(spouse => (
-                  <PersonCard key={spouse.id} person={spouse} />
+                  <PersonCard key={spouse.handle} person={spouse} />
                 ))}
               </div>
             ) : (
@@ -401,12 +178,11 @@ export default async function PersonPage({ params }: PageProps) {
           <div>
             <div className="flex items-center justify-between mb-2">
               <div className="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Children</div>
-              <AddRelationshipButton type="child" personId={id} />
             </div>
             {children.length > 0 ? (
               <div className="grid grid-cols-2 gap-2">
                 {children.map(child => (
-                  <PersonCard key={child.id} person={child} />
+                  <PersonCard key={child.handle} person={child} />
                 ))}
               </div>
             ) : (
@@ -415,49 +191,18 @@ export default async function PersonPage({ params }: PageProps) {
           </div>
 
           {/* Siblings */}
-          <div className="mt-4">
-            <div className="flex items-center justify-between mb-2">
-              <div className="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Siblings</div>
-              <AddRelationshipButton type="sibling" personId={id} />
+          {siblings.length > 0 && (
+            <div className="mt-4">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-[11px] font-medium text-gray-500 uppercase tracking-wider">Siblings</div>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {siblings.map(sibling => (
+                  <PersonCard key={sibling.handle} person={sibling} />
+                ))}
+              </div>
             </div>
-
-            {fullSiblings.length > 0 && (
-              <div className="mb-3">
-                <div className="text-[10px] text-gray-500 mb-1">Full Siblings</div>
-                <div className="grid grid-cols-2 gap-2">
-                  {fullSiblings.map(sibling => (
-                    <PersonCard key={sibling.id} person={sibling} />
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {paternalHalfSiblings.length > 0 && (
-              <div className="mb-3">
-                <div className="text-[10px] text-gray-500 mb-1">Paternal Half-Siblings</div>
-                <div className="grid grid-cols-2 gap-2">
-                  {paternalHalfSiblings.map(sibling => (
-                    <PersonCard key={sibling.id} person={sibling} />
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {maternalHalfSiblings.length > 0 && (
-              <div className="mb-3">
-                <div className="text-[10px] text-gray-500 mb-1">Maternal Half-Siblings</div>
-                <div className="grid grid-cols-2 gap-2">
-                  {maternalHalfSiblings.map(sibling => (
-                    <PersonCard key={sibling.id} person={sibling} />
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {fullSiblings.length === 0 && paternalHalfSiblings.length === 0 && maternalHalfSiblings.length === 0 && (
-              <p className="text-[11px] text-gray-400 italic">No siblings recorded</p>
-            )}
-          </div>
+          )}
         </div>
 
         {/* Connected Mysteries */}
@@ -481,22 +226,16 @@ export default async function PersonPage({ params }: PageProps) {
           </div>
         )}
 
-        {/* Sources */}
-        <div className="bg-[#FDFCFA] border border-[#D3D1C7] rounded-lg p-4 mb-4">
-          <h2 className="text-[15px] font-semibold mb-3">Sources</h2>
-          <p className="text-[13px] text-gray-400 italic">No sources recorded</p>
-        </div>
-
         {/* Research Notes */}
-        {person.bio && (
+        {supabaseData?.bio && (
           <div className="bg-[#FDFCFA] border border-[#D3D1C7] rounded-lg p-4 mb-4">
             <h2 className="text-[15px] font-semibold mb-3">Research Notes</h2>
-            <div className="text-[13px] text-gray-700 whitespace-pre-wrap">{person.bio}</div>
+            <div className="text-[13px] text-gray-700 whitespace-pre-wrap">{supabaseData.bio}</div>
           </div>
         )}
 
         {/* Open Questions */}
-        {person.needs_review && (
+        {supabaseData?.needs_review && (
           <div className="bg-[#FDFCFA] border-l-2 border-[#EF9F27] rounded-lg p-4">
             <h3 className="text-[13px] font-semibold text-[#633806] mb-2">Open Questions</h3>
             <p className="text-[13px] text-gray-700">This person's record needs review and verification.</p>
@@ -513,52 +252,39 @@ export default async function PersonPage({ params }: PageProps) {
               Research Status
             </h3>
             <div className="space-y-1 text-[11px]">
-              <div className="flex justify-between">
-                <span className="text-gray-600">Confidence</span>
-                <span className="font-medium">{person.confidence || 'Not set'}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-600">Brick Wall</span>
-                <span className="font-medium">{person.brick_wall ? 'Yes' : 'No'}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-600">Needs Review</span>
-                <span className="font-medium">{person.needs_review ? 'Yes' : 'No'}</span>
-              </div>
+              {supabaseData?.confidence && (
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Confidence</span>
+                  <span className="font-medium">{supabaseData.confidence}</span>
+                </div>
+              )}
+              {supabaseData?.brick_wall !== undefined && (
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Brick Wall</span>
+                  <span className="font-medium">{supabaseData.brick_wall ? 'Yes' : 'No'}</span>
+                </div>
+              )}
+              {supabaseData?.needs_review !== undefined && (
+                <div className="flex justify-between">
+                  <span className="text-gray-600">Needs Review</span>
+                  <span className="font-medium">{supabaseData.needs_review ? 'Yes' : 'No'}</span>
+                </div>
+              )}
             </div>
           </div>
 
-          {/* Actions */}
+          {/* Gramps Info */}
           <div>
             <h3 className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-2">
-              Actions
-            </h3>
-            <div className="space-y-2">
-              <button className="w-full px-3 py-2 bg-[#EF9F27] text-white rounded text-[11px] font-medium hover:bg-[#d88d1f] transition-colors">
-                Ask Hermes
-              </button>
-              <button className="w-full px-3 py-2 bg-white border border-[#D3D1C7] rounded text-[11px] font-medium hover:border-[#EF9F27] transition-colors">
-                Link to Mystery
-              </button>
-              <button className="w-full px-3 py-2 bg-white border border-[#D3D1C7] rounded text-[11px] font-medium hover:border-[#EF9F27] transition-colors">
-                Upload Document
-              </button>
-              <EditFactsButton person={person} personId={id} />
-            </div>
-          </div>
-
-          {/* Wiki Info */}
-          <div>
-            <h3 className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-2">
-              Wiki Page
+              Gramps Data
             </h3>
             <div className="text-[11px] text-gray-600">
               <div className="mb-1">
-                <span className="font-mono text-[10px]">
-                  people/{person.surname?.toLowerCase()}-{person.given_name?.toLowerCase()}.md
-                </span>
+                <span className="font-medium">ID:</span> <span className="font-mono">{person.gramps_id}</span>
               </div>
-              <div className="text-gray-400">Last sync: Never</div>
+              <div className="mb-1">
+                <span className="font-medium">Handle:</span> <span className="font-mono text-[10px]">{person.handle}</span>
+              </div>
             </div>
           </div>
         </div>
