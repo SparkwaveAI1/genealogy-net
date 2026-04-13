@@ -227,6 +227,64 @@ export async function POST(req: NextRequest) {
       // For now, just return the mystery_id in the response
     }
 
+    // Search Gramps for each individual found in the document
+    const peopleMatches: any[] = [];
+    if (analysis.individuals_found && analysis.individuals_found.length > 0) {
+      try {
+        // Fetch all people from Gramps
+        const grampsBaseUrl = process.env.GRAMPS_API_URL || 'http://178.156.250.119/api';
+
+        // Get auth token
+        const tokenResponse = await fetch(`${grampsBaseUrl}/token/`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: process.env.GRAMPS_USERNAME,
+            password: process.env.GRAMPS_PASSWORD,
+          }),
+        });
+        const { access_token } = await tokenResponse.json();
+
+        // Fetch people with limited fields for search
+        const peopleResponse = await fetch(`${grampsBaseUrl}/people/?keys=gramps_id,handle,primary_name,birth_ref_index,death_ref_index,event_ref_list`, {
+          headers: { 'Authorization': `Bearer ${access_token}` },
+        });
+        const allPeople = await peopleResponse.json();
+
+        // For each individual found, search for matches
+        for (const individual of analysis.individuals_found) {
+          const name = individual.name.toLowerCase();
+          const nameParts = name.split(' ').filter((p: string) => p.length > 0);
+
+          // Simple matching: check if first and last name appear in person's name
+          const matches = allPeople.filter((person: any) => {
+            const firstName = person.primary_name.first_name?.toLowerCase() || '';
+            const surname = person.primary_name.surname_list?.[0]?.surname?.toLowerCase() || '';
+            const fullName = `${firstName} ${surname}`.toLowerCase();
+
+            // Check if all name parts match
+            return nameParts.every((part: string) => fullName.includes(part));
+          }).slice(0, 5); // Limit to 5 matches per name
+
+          if (matches.length > 0) {
+            peopleMatches.push({
+              extracted_name: individual.name,
+              extracted_dates: individual.dates || null,
+              extracted_places: individual.places || null,
+              candidates: matches.map((p: any) => ({
+                gramps_id: p.gramps_id,
+                name: `${p.primary_name.first_name || ''} ${p.primary_name.surname_list?.[0]?.surname || ''}`.trim(),
+                handle: p.handle,
+              })),
+            });
+          }
+        }
+      } catch (searchError) {
+        console.error('Error searching Gramps for people:', searchError);
+        // Continue even if Gramps search fails
+      }
+    }
+
     console.log('Returning success response');
     return NextResponse.json({
       success: true,
@@ -234,6 +292,7 @@ export async function POST(req: NextRequest) {
       document_id: documentData?.id,
       mystery_id: mystery_id || null,
       raw_response: analysisText,
+      people_matches: peopleMatches,
     });
   } catch (error: any) {
     console.error('Document processing error:', error);

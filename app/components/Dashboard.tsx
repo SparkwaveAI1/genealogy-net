@@ -30,6 +30,17 @@ interface AnalysisResult {
   follow_up_records: string[]
 }
 
+interface PeopleMatch {
+  extracted_name: string
+  extracted_dates: string | null
+  extracted_places: string | null
+  candidates: Array<{
+    gramps_id: string
+    name: string
+    handle: string
+  }>
+}
+
 export default function Dashboard() {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
@@ -48,6 +59,9 @@ export default function Dashboard() {
   const [documentType, setDocumentType] = useState('')
   const [processingInstructions, setProcessingInstructions] = useState('')
   const [selectedMysteryId, setSelectedMysteryId] = useState('')
+  const [peopleMatches, setPeopleMatches] = useState<PeopleMatch[]>([])
+  const [selectedPeople, setSelectedPeople] = useState<Set<string>>(new Set())
+  const [documentId, setDocumentId] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const scrollToBottom = () => {
@@ -210,6 +224,9 @@ export default function Dashboard() {
       if (data.success && data.analysis) {
         console.log('Analysis received successfully')
         setUploadResult(data.analysis)
+        setPeopleMatches(data.people_matches || [])
+        setDocumentId(data.document_id || null)
+        setSelectedPeople(new Set()) // Reset selected people
       } else {
         setUploadError(data.error || 'Unknown error occurred')
         console.error('Upload error:', data)
@@ -241,6 +258,42 @@ export default function Dashboard() {
       alert('Added to wiki!')
     } catch (error) {
       console.error('Error adding to wiki:', error)
+    }
+  }
+
+  const togglePersonSelection = (grampsId: string) => {
+    const newSelected = new Set(selectedPeople)
+    if (newSelected.has(grampsId)) {
+      newSelected.delete(grampsId)
+    } else {
+      newSelected.add(grampsId)
+    }
+    setSelectedPeople(newSelected)
+  }
+
+  const handleSavePeopleLinks = async () => {
+    if (!documentId || selectedPeople.size === 0) return
+
+    try {
+      // Create document_people records in Supabase
+      const response = await fetch('/api/documents/people', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          document_id: documentId,
+          gramps_ids: Array.from(selectedPeople),
+        }),
+      })
+
+      if (response.ok) {
+        alert(`Linked ${selectedPeople.size} people to this document!`)
+      } else {
+        const error = await response.json()
+        alert(`Error saving links: ${error.message}`)
+      }
+    } catch (error) {
+      console.error('Error saving people links:', error)
+      alert('Error saving people links')
     }
   }
 
@@ -442,6 +495,65 @@ export default function Dashboard() {
                           {flag}
                         </div>
                       ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* People Matches from Gramps */}
+                {peopleMatches.length > 0 && (
+                  <div className="mb-3">
+                    <div className="text-[10px] text-gray-500 uppercase mb-1">People Identified</div>
+                    <div className="text-[10px] text-gray-600 mb-2">
+                      Select people from your Gramps tree to link to this document
+                    </div>
+                    <div className="space-y-3">
+                      {peopleMatches.map((match, idx) => (
+                        <div key={idx} className="border border-[#D3D1C7] rounded p-2">
+                          <div className="text-[11px] font-medium text-gray-700 mb-1">
+                            Extracted: {match.extracted_name}
+                            {match.extracted_dates && (
+                              <span className="text-gray-500 ml-1">({match.extracted_dates})</span>
+                            )}
+                          </div>
+                          <div className="space-y-1">
+                            {match.candidates.map((candidate) => (
+                              <label
+                                key={candidate.gramps_id}
+                                className="flex items-center gap-2 text-[11px] hover:bg-[#F5F2ED] p-1 rounded cursor-pointer"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={selectedPeople.has(candidate.gramps_id)}
+                                  onChange={() => togglePersonSelection(candidate.gramps_id)}
+                                  className="w-3 h-3"
+                                />
+                                <div className="flex-1">
+                                  <span className="font-medium">{candidate.name}</span>
+                                  <span className="text-gray-500 ml-1 font-mono text-[10px]">
+                                    {candidate.gramps_id}
+                                  </span>
+                                </div>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    {selectedPeople.size > 0 && (
+                      <button
+                        onClick={handleSavePeopleLinks}
+                        className="w-full mt-2 px-2 py-1.5 bg-[#EF9F27] text-white rounded text-[10px] font-medium hover:bg-[#d88d1f] transition-colors"
+                      >
+                        Link {selectedPeople.size} {selectedPeople.size === 1 ? 'Person' : 'People'} to Document
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {selectedMysteryId && (
+                  <div className="mb-3 p-2 bg-[#E6F1FB] border border-[#0C447C] rounded">
+                    <div className="text-[10px] text-[#0C447C] font-medium">
+                      Linked to mystery: {mysteries.find(m => m.id === selectedMysteryId)?.title || selectedMysteryId}
                     </div>
                   </div>
                 )}
