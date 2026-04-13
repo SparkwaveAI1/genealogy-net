@@ -16,7 +16,7 @@ function PersonCard({ person }: { person: GrampsPerson }) {
 
   return (
     <Link
-      href={`/people/${person.handle}`}
+      href={`/people/${person.gramps_id}`}
       className="block bg-[#FDFCFA] border border-[#D3D1C7] rounded p-3 hover:border-[#EF9F27] transition-colors"
     >
       <div className="flex items-start gap-2">
