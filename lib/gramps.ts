@@ -78,7 +78,11 @@ async function grampsRequest<T>(endpoint: string, options?: RequestInit): Promis
  * Get all people or search by name
  */
 export async function getPeople(search?: string): Promise<GrampsPerson[]> {
-  const endpoint = search ? `/people/?q=${encodeURIComponent(search)}` : '/people/'
+  // Use keys parameter to only fetch needed fields for better performance
+  const keys = 'handle,gramps_id,primary_name'
+  const endpoint = search
+    ? `/people/?q=${encodeURIComponent(search)}&keys=${keys}`
+    : `/people/?keys=${keys}`
   return grampsRequest<GrampsPerson[]>(endpoint)
 }
 
