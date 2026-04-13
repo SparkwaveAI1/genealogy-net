@@ -3,7 +3,6 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { getPeople } from '@/lib/gramps'
 import { GrampsPerson } from '@/lib/types'
 
 interface PersonDisplay {
@@ -35,7 +34,11 @@ export default function PeoplePage() {
   async function fetchPeople() {
     setIsLoading(true)
     try {
-      const grampsPeople = await getPeople()
+      const response = await fetch('/api/gramps/people')
+      if (!response.ok) {
+        throw new Error('Failed to fetch people')
+      }
+      const grampsPeople: GrampsPerson[] = await response.json()
 
       const mapped: PersonDisplay[] = grampsPeople.map((p: GrampsPerson) => ({
         id: p.handle,

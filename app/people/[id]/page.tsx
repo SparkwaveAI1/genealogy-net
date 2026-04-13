@@ -1,6 +1,5 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import { getPerson, getPersonParents, getPersonChildren, getPersonSpouses, getPersonSiblings, getPersonBirthYear, getPersonDeathYear } from '@/lib/gramps'
 import { GrampsPerson } from '@/lib/types'
 import { createServerSupabaseClient } from '@/lib/supabase-server'
 
@@ -41,24 +40,54 @@ interface PageProps {
 export default async function PersonPage({ params }: PageProps) {
   const { id } = await params
 
-  // Fetch from Gramps
+  // Fetch from Gramps API route
   let person: GrampsPerson
+  let birthYear: number | null = null
+  let deathYear: number | null = null
+
   try {
-    person = await getPerson(id)
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'
+    const personResponse = await fetch(`${baseUrl}/api/gramps/people/${id}`, {
+      cache: 'no-store'
+    })
+
+    if (!personResponse.ok) {
+      notFound()
+    }
+
+    const personData = await personResponse.json()
+    person = personData.person
+    birthYear = personData.birthYear
+    deathYear = personData.deathYear
   } catch (error) {
     console.error('Error fetching person from Gramps:', error)
     notFound()
   }
 
-  // Fetch family relationships from Gramps
-  const { father, mother } = await getPersonParents(id)
-  const children = await getPersonChildren(id)
-  const spouses = await getPersonSpouses(id)
-  const siblings = await getPersonSiblings(id)
+  // Fetch family relationships from Gramps API route
+  let father: GrampsPerson | null = null
+  let mother: GrampsPerson | null = null
+  let children: GrampsPerson[] = []
+  let spouses: GrampsPerson[] = []
+  let siblings: GrampsPerson[] = []
 
-  // Get birth/death years (async, may be slow)
-  const birthYear = await getPersonBirthYear(person)
-  const deathYear = await getPersonDeathYear(person)
+  try {
+    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'
+    const familyResponse = await fetch(`${baseUrl}/api/gramps/people/${id}/family`, {
+      cache: 'no-store'
+    })
+
+    if (familyResponse.ok) {
+      const familyData = await familyResponse.json()
+      father = familyData.father
+      mother = familyData.mother
+      children = familyData.children
+      spouses = familyData.spouses
+      siblings = familyData.siblings
+    }
+  } catch (error) {
+    console.error('Error fetching family from Gramps:', error)
+  }
 
   // Optional: Check Supabase for supplementary data (confidence, brick_wall, mysteries)
   const supabase = createServerSupabaseClient()
