@@ -87,14 +87,53 @@ export async function getPeople(search?: string): Promise<GrampsPerson[]> {
 }
 
 /**
- * Get single person by Gramps ID or handle
+ * Get single person by Gramps ID
+ * Uses query parameter ?gramps_id={id} because /people/{id}/ endpoint returns 404
  */
 export async function getPerson(grampsId: string): Promise<GrampsPerson> {
   console.log('getPerson called with:', grampsId)
-  console.log('Full URL:', `${GRAMPS_API_URL}/people/${grampsId}/`)
-  const result = await grampsRequest<GrampsPerson>(`/people/${grampsId}/`)
-  console.log('Gramps API returned person:', JSON.stringify(result, null, 2))
-  return result
+  const endpoint = `/people/?gramps_id=${grampsId}`
+  console.log('Full URL:', `${GRAMPS_API_URL}${endpoint}`)
+  const result = await grampsRequest<GrampsPerson[]>(endpoint)
+  console.log('Gramps API returned:', result.length, 'people')
+
+  if (!result || result.length === 0) {
+    throw new Error(`Person not found: ${grampsId}`)
+  }
+
+  const person = result[0]
+  console.log('Gramps API returned person:', JSON.stringify(person, null, 2))
+  return person
+}
+
+/**
+ * Helper: Get person by handle
+ * Since /people/{handle}/ endpoint doesn't work, fetch all and filter
+ */
+async function getPersonByHandle(handle: string): Promise<GrampsPerson | null> {
+  try {
+    const allPeople = await grampsRequest<GrampsPerson[]>('/people/?keys=handle,gramps_id,primary_name')
+    const person = allPeople.find(p => p.handle === handle)
+    return person || null
+  } catch (error) {
+    console.error(`Error fetching person by handle ${handle}:`, error)
+    return null
+  }
+}
+
+/**
+ * Helper: Get family by handle
+ * Since /families/{handle}/ endpoint doesn't work, fetch all and filter
+ */
+async function getFamilyByHandle(handle: string): Promise<GrampsFamily | null> {
+  try {
+    const allFamilies = await grampsRequest<GrampsFamily[]>('/families/')
+    const family = allFamilies.find(f => f.handle === handle)
+    return family || null
+  } catch (error) {
+    console.error(`Error fetching family by handle ${handle}:`, error)
+    return null
+  }
 }
 
 /**
@@ -110,17 +149,21 @@ export async function getPersonParents(grampsId: string): Promise<{ father: Gram
 
     // Get the first parent family
     const familyHandle = person.parent_family_list[0]
-    const family = await grampsRequest<GrampsFamily>(`/families/${familyHandle}/`)
+    const family = await getFamilyByHandle(familyHandle)
+
+    if (!family) {
+      return { father: null, mother: null }
+    }
 
     let father: GrampsPerson | null = null
     let mother: GrampsPerson | null = null
 
     if (family.father_handle) {
-      father = await grampsRequest<GrampsPerson>(`/people/${family.father_handle}/`)
+      father = await getPersonByHandle(family.father_handle)
     }
 
     if (family.mother_handle) {
-      mother = await grampsRequest<GrampsPerson>(`/people/${family.mother_handle}/`)
+      mother = await getPersonByHandle(family.mother_handle)
     }
 
     return { father, mother }
@@ -144,12 +187,14 @@ export async function getPersonChildren(grampsId: string): Promise<GrampsPerson[
     const children: GrampsPerson[] = []
 
     for (const familyHandle of person.family_list) {
-      const family = await grampsRequest<GrampsFamily>(`/families/${familyHandle}/`)
+      const family = await getFamilyByHandle(familyHandle)
 
-      if (family.child_ref_list) {
+      if (family?.child_ref_list) {
         for (const childRef of family.child_ref_list) {
-          const child = await grampsRequest<GrampsPerson>(`/people/${childRef.ref}/`)
-          children.push(child)
+          const child = await getPersonByHandle(childRef.ref)
+          if (child) {
+            children.push(child)
+          }
         }
       }
     }
@@ -175,7 +220,9 @@ export async function getPersonSpouses(grampsId: string): Promise<GrampsPerson[]
     const spouses: GrampsPerson[] = []
 
     for (const familyHandle of person.family_list) {
-      const family = await grampsRequest<GrampsFamily>(`/families/${familyHandle}/`)
+      const family = await getFamilyByHandle(familyHandle)
+
+      if (!family) continue
 
       // Get the other spouse
       const spouseHandle = family.father_handle === person.handle
@@ -183,8 +230,10 @@ export async function getPersonSpouses(grampsId: string): Promise<GrampsPerson[]
         : family.father_handle
 
       if (spouseHandle) {
-        const spouse = await grampsRequest<GrampsPerson>(`/people/${spouseHandle}/`)
-        spouses.push(spouse)
+        const spouse = await getPersonByHandle(spouseHandle)
+        if (spouse) {
+          spouses.push(spouse)
+        }
       }
     }
 
@@ -207,9 +256,9 @@ export async function getPersonSiblings(grampsId: string): Promise<GrampsPerson[
     }
 
     const familyHandle = person.parent_family_list[0]
-    const family = await grampsRequest<GrampsFamily>(`/families/${familyHandle}/`)
+    const family = await getFamilyByHandle(familyHandle)
 
-    if (!family.child_ref_list) {
+    if (!family?.child_ref_list) {
       return []
     }
 
@@ -217,8 +266,10 @@ export async function getPersonSiblings(grampsId: string): Promise<GrampsPerson[
 
     for (const childRef of family.child_ref_list) {
       if (childRef.ref !== person.handle) {
-        const sibling = await grampsRequest<GrampsPerson>(`/people/${childRef.ref}/`)
-        siblings.push(sibling)
+        const sibling = await getPersonByHandle(childRef.ref)
+        if (sibling) {
+          siblings.push(sibling)
+        }
       }
     }
 

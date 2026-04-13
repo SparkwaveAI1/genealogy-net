@@ -43,7 +43,7 @@ export default function PeoplePage() {
       const mapped: PersonDisplay[] = grampsPeople.map((p: GrampsPerson) => {
         console.log('Person handle:', p.handle, 'gramps_id:', p.gramps_id)
         return {
-          id: p.handle,
+          id: p.gramps_id,  // Use gramps_id instead of handle for lookup
           gramps_id: p.gramps_id,
           given_name: p.primary_name.first_name || '',
           surname: p.primary_name.surname_list?.[0]?.surname || '',
