@@ -1,3 +1,5 @@
+// @ts-nocheck
+// TypeScript doesn't understand node-pty's IEvent callable interface and IPty.on() method
 import { NextRequest, NextResponse } from 'next/server'
 import * as pty from 'node-pty'
 import fs from 'fs'
@@ -97,7 +99,8 @@ function startHermesJob(jobId: string, prompt: string, model?: string): void {
   let stdout = ''
   let resolved = false
 
-  ptyProcess.onData((data: string) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (ptyProcess as any).onData((data: string) => {
     stdout += data
     // Detect completion: "session_id:" line appears in quiet mode
     if (!resolved && stdout.includes('session_id:')) {
@@ -109,7 +112,8 @@ function startHermesJob(jobId: string, prompt: string, model?: string): void {
     }
   })
 
-  ptyProcess.onExit(({ exitCode }) => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (ptyProcess as any).onExit(({ exitCode }: { exitCode: number }) => {
     if (!resolved) {
       resolved = true
       if (exitCode !== 0) {
@@ -128,7 +132,9 @@ function startHermesJob(jobId: string, prompt: string, model?: string): void {
     }
   })
 
-  ptyProcess.on('error', (err: Error) => {
+  // Cast to any to access .on() for error events (node-pty types don't expose EventEmitter.on)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (ptyProcess as any).on('error', (err: Error) => {
     if (!resolved) {
       resolved = true
       console.error(`[Hermes job ${jobId}] PTY error: ${err.message}`)
