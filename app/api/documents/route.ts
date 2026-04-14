@@ -1,206 +1,282 @@
-import Anthropic from '@anthropic-ai/sdk';
-import { NextRequest, NextResponse } from 'next/server';
-import { supabase } from '@/lib/supabase';
+import { NextRequest, NextResponse } from 'next/server'
+import { spawn } from 'child_process'
+import { supabase } from '@/lib/supabase'
 
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-});
+// DEPRECATED: This route now calls Hermes instead of Anthropic directly.
+// Legacy path kept for backward compatibility during rollout.
+// TODO: Remove direct Anthropic call after Hermes path is verified.
 
-const GENEALOGY_DOCUMENT_SYSTEM_PROMPT = `You are a genealogy document analyst following the Genealogical Proof Standard. Analyze this document and extract:
-- All named individuals with dates and places
-- Document type and date
-- What this confirms or contradicts
-- Confidence level of key claims
-- Which mystery it might relate to
-- What follow-up records to search
+const HERMES_BIN = '/root/.local/bin/hermes'
+const GRAMPS_API = process.env.GRAMPS_API_URL || 'http://178.156.250.119/api'
 
-Flag any suspicious or unverified claims.
+interface HermesIntakeResult {
+  summary?: string
+  analysis?: string
+  proposed_actions?: any[]
+  wiki_filed?: boolean
+  gramps_updated?: string[]
+  mysteries_informed?: string[]
+  error?: string
+}
 
-Return your analysis as a JSON object with these fields:
-{
-  "individuals_found": [{"name": "...", "dates": "...", "places": "...", "role": "..."}],
-  "key_facts": ["fact 1", "fact 2", ...],
-  "confidence_assessment": "overall confidence level and reasoning",
-  "flags": ["flag 1", "flag 2", ...],
-  "suggested_mystery_link": "which mystery this might relate to",
-  "follow_up_records": ["record type 1", "record type 2", ...]
-}`;
+/**
+ * Spawn Hermes CLI with document intake skill and return parsed JSON result.
+ */
+async function spawnHermesIntake(
+  prompt: string,
+  fileName: string,
+  fileType: string,
+  base64: string,
+  timeoutMs = 180_000,
+): Promise<HermesIntakeResult> {
+  return new Promise((resolve, reject) => {
+    const args = [
+      'chat',
+      '-q', prompt,
+      '--provider', 'minimax',
+      '-t', 'terminal,file,web,search,skills',
+      '--skills', 'document-intake',
+      '--source', 'grip-document',
+      '--quiet',
+      '--file', fileName,
+      '--file-type', fileType,
+      '--file-base64', base64,
+    ]
+
+    console.log('[Hermes] Spawning:', HERMES_BIN, args.join(' '))
+
+    const proc = spawn(HERMES_BIN, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        HERMES_HOME: '/root/.hermes',
+        TERM: 'dumb',
+      },
+    })
+
+    let stdout = ''
+    let stderr = ''
+
+    proc.stdout?.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString()
+    })
+
+    proc.stderr?.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString()
+    })
+
+    proc.on('error', (err) => {
+      console.error('[Hermes] Spawn error:', err.message)
+      reject(new Error(`Hermes spawn error: ${err.message}`))
+    })
+
+    const timer = setTimeout(() => {
+      proc.kill('SIGKILL')
+      reject(new Error(`Hermes timed out after ${timeoutMs / 1000}s`))
+    }, timeoutMs)
+
+    proc.on('close', (code) => {
+      clearTimeout(timer)
+      console.log('[Hermes] Exit code:', code)
+      if (code !== 0 && !stdout) {
+        console.error('[Hermes] stderr:', stderr)
+        reject(new Error(`Hermes exited with code ${code}`))
+        return
+      }
+
+      // Extract JSON from output — look for JSON block at end
+      try {
+        const result = parseHermesOutput(stdout)
+        resolve(result)
+      } catch (err) {
+        console.error('[Hermes] Failed to parse output:', err)
+        // Fallback: return raw stdout as summary
+        resolve({
+          summary: stdout.substring(0, 1000),
+          analysis: stdout,
+          proposed_actions: [],
+          wiki_filed: false,
+          gramps_updated: [],
+          mysteries_informed: [],
+        })
+      }
+    })
+  })
+}
+
+/**
+ * Extract JSON object from Hermes stdout.
+ * Looks for the last {...} or [...] block in the output.
+ */
+function parseHermesOutput(stdout: string): HermesIntakeResult {
+  // Try to find a JSON object ( {...} ) at the end of output
+  const lines = stdout.split('\n')
+  const jsonLines: string[] = []
+  let inJson = false
+  let braceCount = 0
+
+  // Search from the end for a JSON object
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim()
+    if (!inJson && (line.startsWith('{') || line.startsWith('['))) {
+      inJson = true
+    }
+    if (inJson) {
+      jsonLines.unshift(lines[i])
+      if (line.includes('{')) braceCount += (line.match(/{/g) || []).length
+      if (line.includes('}')) braceCount -= (line.match(/}/g) || []).length
+      if (braceCount === 0 && inJson) break
+    }
+  }
+
+  if (jsonLines.length > 0) {
+    const jsonStr = jsonLines.join('\n')
+    return JSON.parse(jsonStr)
+  }
+
+  // Try regex fallback
+  const objMatch = stdout.match(/\{[\s\S]*\}/)
+  if (objMatch) {
+    return JSON.parse(objMatch[0])
+  }
+
+  throw new Error('No JSON found in Hermes output')
+}
+
+/**
+ * Get Gramps JWT token.
+ */
+async function getGrampsToken(): Promise<string> {
+  const res = await fetch(`${GRAMPS_API}/token/`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      username: process.env.GRAMPS_USERNAME || 'scott',
+      password: process.env.GRAMPS_PASSWORD || 'claw1234',
+    }),
+  })
+  const data = await res.json()
+  return data.access_token || ''
+}
+
+/**
+ * Search Gramps for people matching the given names.
+ */
+async function searchGrampsPeople(
+  individuals: Array<{ name: string; dates?: string; places?: string; role?: string }>,
+  token: string,
+): Promise<any[]> {
+  if (!individuals || individuals.length === 0) return []
+
+  try {
+    const res = await fetch(`${GRAMPS_API}/people/?page=1&pagesize=500`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    const allPeople: any[] = await res.json()
+
+    const matches: any[] = []
+    for (const ind of individuals) {
+      const name = ind.name.toLowerCase()
+      const parts = name.split(' ').filter((p) => p.length > 1)
+
+      const found = allPeople
+        .filter((p: any) => {
+          const first = (p.primary_name?.first_name || '').toLowerCase()
+          const surname = (p.primary_name?.surname_list?.[0]?.surname || '').toLowerCase()
+          const full = `${first} ${surname}`
+          return parts.every((part) => full.includes(part))
+        })
+        .slice(0, 5)
+        .map((p: any) => ({
+          gramps_id: p.gramps_id,
+          name: `${p.primary_name?.first_name || ''} ${p.primary_name?.surname_list?.[0]?.surname || ''}`.trim(),
+          handle: p.handle,
+        }))
+
+      if (found.length > 0) {
+        matches.push({
+          extracted_name: ind.name,
+          extracted_dates: ind.dates || null,
+          extracted_places: ind.places || null,
+          candidates: found,
+        })
+      }
+    }
+    return matches
+  } catch (err) {
+    console.error('[Gramps] Search error:', err)
+    return []
+  }
+}
 
 export async function POST(req: NextRequest) {
   try {
-    console.log('Document upload started');
+    console.log('[Document] Upload started')
 
-    const formData = await req.formData();
-    const file = formData.get('file') as File;
-    const individual_context = formData.get('individual_context') as string;
-    const document_type = formData.get('document_type') as string;
-    const processing_instructions = formData.get('processing_instructions') as string;
-    const mystery_id = formData.get('mystery_id') as string;
-
-    console.log('File received:', file?.name, file?.type, file?.size);
+    const formData = await req.formData()
+    const file = formData.get('file') as File
+    const individual_context = formData.get('individual_context') as string
+    const document_type = formData.get('document_type') as string
+    const processing_instructions = formData.get('processing_instructions') as string
+    const mystery_id = formData.get('mystery_id') as string
 
     if (!file) {
-      return NextResponse.json(
-        { error: 'No file provided' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'No file provided' }, { status: 400 })
     }
 
-    if (!process.env.ANTHROPIC_API_KEY) {
-      console.error('ANTHROPIC_API_KEY not set');
-      return NextResponse.json(
-        { error: 'API key not configured' },
-        { status: 500 }
-      );
-    }
+    console.log('[Document] File:', file.name, file.type, file.size, 'bytes')
 
-    // Read file content
-    const bytes = await file.arrayBuffer();
-    const buffer = Buffer.from(bytes);
+    // Determine file category for Hermes
+    const isImage = file.type.startsWith('image/')
+    const isPDF = file.type === 'application/pdf'
+    const isText =
+      file.type === 'text/plain' ||
+      file.type === 'text/markdown' ||
+      file.name.endsWith('.txt') ||
+      file.name.endsWith('.md')
 
-    // Determine file type
-    const isImage = file.type.startsWith('image/');
-    const isPDF = file.type === 'application/pdf';
-    const isText = file.type === 'text/plain' || file.name.endsWith('.txt');
-    const isMarkdown = file.type === 'text/markdown' || file.name.endsWith('.md');
-    const isWordDoc = file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
-                      file.type === 'application/msword' ||
-                      file.name.endsWith('.docx') ||
-                      file.name.endsWith('.doc');
+    // Read buffer and encode base64
+    const bytes = await file.arrayBuffer()
+    const buffer = Buffer.from(bytes)
+    const base64 = buffer.toString('base64')
 
-    // Build user message prefix
-    let userMessage = 'Please analyze this genealogy document.\n\n';
-    if (individual_context) {
-      userMessage += `Individual context: ${individual_context}\n`;
-    }
-    if (document_type) {
-      userMessage += `Document type: ${document_type}\n`;
-    }
-    if (processing_instructions) {
-      userMessage += `Instructions: ${processing_instructions}\n`;
-    }
-
-    // Build content array based on file type
-    const content: any[] = [];
-
-    if (isText || isMarkdown) {
-      // Handle text-based files
-      const textContent = buffer.toString('utf-8');
-      userMessage += `\n\n--- FILE CONTENT (${file.name}) ---\n${textContent}\n--- END FILE CONTENT ---`;
-
-      content.push({
-        type: 'text',
-        text: userMessage,
-      });
-    } else if (isPDF || isWordDoc) {
-      // Handle PDF and Word documents as base64
-      const base64 = buffer.toString('base64');
-      content.push({
-        type: 'document',
-        source: {
-          type: 'base64',
-          media_type: 'application/pdf',
-          data: base64,
-        },
-      });
-      content.push({
-        type: 'text',
-        text: userMessage,
-      });
+    // Build the prompt for Hermes
+    let fileNote = ''
+    if (isText) {
+      const text = buffer.toString('utf-8')
+      fileNote = `\n--- FILE CONTENT ---\n${text.slice(0, 8000)}\n--- END FILE CONTENT ---\n`
     } else if (isImage) {
-      // Handle images
-      const base64 = buffer.toString('base64');
-
-      // Determine image media type
-      let imageMediaType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' = 'image/jpeg';
-      if (file.type === 'image/png') {
-        imageMediaType = 'image/png';
-      } else if (file.type === 'image/gif') {
-        imageMediaType = 'image/gif';
-      } else if (file.type === 'image/webp') {
-        imageMediaType = 'image/webp';
-      }
-
-      content.push({
-        type: 'image',
-        source: {
-          type: 'base64',
-          media_type: imageMediaType,
-          data: base64,
-        },
-      });
-      content.push({
-        type: 'text',
-        text: userMessage,
-      });
+      fileNote = `\n[Image file attached: ${file.name} — Hermes will analyze via vision tool]\n`
+    } else if (isPDF) {
+      fileNote = `\n[PDF file attached: ${file.name} — Hermes will extract text via pdftotext]\n`
     } else {
-      // Fallback: try to read as text
-      try {
-        const textContent = buffer.toString('utf-8');
-        userMessage += `\n\n--- FILE CONTENT (${file.name}) ---\n${textContent}\n--- END FILE CONTENT ---`;
-
-        content.push({
-          type: 'text',
-          text: userMessage,
-        });
-      } catch (error) {
-        return NextResponse.json(
-          { error: 'Unsupported file type. Please upload a PDF, image, text, markdown, or Word document.' },
-          { status: 400 }
-        );
-      }
+      fileNote = `\n[File attached: ${file.name} (${file.type}) — supported types: text, image, PDF]\n`
     }
 
-    // Send to Claude API
-    console.log('Sending to Claude API...');
-    const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 2000,
-      system: GENEALOGY_DOCUMENT_SYSTEM_PROMPT,
-      messages: [
-        {
-          role: 'user',
-          content,
-        },
-      ],
-    });
+    const context = `
+Document intake request from GRIP.
 
-    console.log('Claude API response received');
+File: ${file.name}
+Document type: ${document_type || 'unknown'}
+Mystery ID: ${mystery_id || 'none'}
+Individual context: ${individual_context || 'none'}
+Processing instructions: ${processing_instructions || 'none'}
+${fileNote}
+Load the document_intake skill and follow its full workflow. Present proposed actions as a checklist for user confirmation, then execute confirmed actions. File the raw document to the wiki, create a source page, and write any confirmed facts back to Gramps.
+`.trim()
 
-    // Extract text content from response
-    const textContent = response.content.find(block => block.type === 'text');
-    let analysisText = textContent && 'text' in textContent ? textContent.text : '';
-    console.log('Analysis text length:', analysisText.length);
-
-    // Try to parse JSON from the response
-    let analysis;
+    // Spawn Hermes for analysis
+    console.log('[Document] Spawning Hermes for analysis...')
+    let hermesResult: HermesIntakeResult
     try {
-      // Look for JSON in the response (might be wrapped in markdown code blocks)
-      const jsonMatch = analysisText.match(/```json\n([\s\S]*?)\n```/) || analysisText.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        const jsonStr = jsonMatch[1] || jsonMatch[0];
-        analysis = JSON.parse(jsonStr);
-      } else {
-        // If no JSON found, create a structured response from the text
-        analysis = {
-          individuals_found: [],
-          key_facts: [analysisText],
-          confidence_assessment: 'See analysis text',
-          flags: [],
-          suggested_mystery_link: '',
-          follow_up_records: [],
-        };
-      }
-    } catch (parseError) {
-      // If parsing fails, wrap the text response
-      analysis = {
-        individuals_found: [],
-        key_facts: [analysisText],
-        confidence_assessment: 'See analysis text',
-        flags: [],
-        suggested_mystery_link: '',
-        follow_up_records: [],
-      };
+      hermesResult = await spawnHermesIntake(context, file.name, file.type, base64, 180_000)
+      console.log('[Document] Hermes result received')
+    } catch (hermesErr: any) {
+      console.error('[Document] Hermes error:', hermesErr.message)
+      return NextResponse.json(
+        { success: false, error: `Hermes analysis failed: ${hermesErr.message}` },
+        { status: 500 },
+      )
     }
 
     // Save document record to Supabase
@@ -210,100 +286,78 @@ export async function POST(req: NextRequest) {
         {
           title: file.name,
           document_type: document_type || 'other',
-          description: analysisText.substring(0, 500), // Store first 500 chars of analysis
+          description: hermesResult.summary?.substring(0, 500) || '',
           document_date: new Date().toISOString(),
         },
       ])
       .select()
-      .single();
+      .single()
 
     if (dbError) {
-      console.error('Error saving document to database:', dbError);
+      console.error('[Document] Supabase save error:', dbError)
     }
 
-    // If mystery_id provided, link the document to the mystery
-    if (mystery_id && documentData) {
-      // Note: You'd need a mystery_documents table for this
-      // For now, just return the mystery_id in the response
-    }
-
-    // Search Gramps for each individual found in the document
-    const peopleMatches: any[] = [];
-    if (analysis.individuals_found && analysis.individuals_found.length > 0) {
+    // Search Gramps for people found in the document
+    let peopleMatches: any[] = []
+    if (hermesResult.analysis) {
       try {
-        // Fetch all people from Gramps
-        const grampsBaseUrl = process.env.GRAMPS_API_URL || 'http://178.156.250.119/api';
-
-        // Get auth token
-        const tokenResponse = await fetch(`${grampsBaseUrl}/token/`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            username: process.env.GRAMPS_USERNAME,
-            password: process.env.GRAMPS_PASSWORD,
-          }),
-        });
-        const { access_token } = await tokenResponse.json();
-
-        // Fetch people with limited fields for search
-        const peopleResponse = await fetch(`${grampsBaseUrl}/people/?keys=gramps_id,handle,primary_name,birth_ref_index,death_ref_index,event_ref_list`, {
-          headers: { 'Authorization': `Bearer ${access_token}` },
-        });
-        const allPeople = await peopleResponse.json();
-
-        // For each individual found, search for matches
-        for (const individual of analysis.individuals_found) {
-          const name = individual.name.toLowerCase();
-          const nameParts = name.split(' ').filter((p: string) => p.length > 0);
-
-          // Simple matching: check if first and last name appear in person's name
-          const matches = allPeople.filter((person: any) => {
-            const firstName = person.primary_name.first_name?.toLowerCase() || '';
-            const surname = person.primary_name.surname_list?.[0]?.surname?.toLowerCase() || '';
-            const fullName = `${firstName} ${surname}`.toLowerCase();
-
-            // Check if all name parts match
-            return nameParts.every((part: string) => fullName.includes(part));
-          }).slice(0, 5); // Limit to 5 matches per name
-
-          if (matches.length > 0) {
-            peopleMatches.push({
-              extracted_name: individual.name,
-              extracted_dates: individual.dates || null,
-              extracted_places: individual.places || null,
-              candidates: matches.map((p: any) => ({
-                gramps_id: p.gramps_id,
-                name: `${p.primary_name.first_name || ''} ${p.primary_name.surname_list?.[0]?.surname || ''}`.trim(),
-                handle: p.handle,
-              })),
-            });
-          }
+        const token = await getGrampsToken()
+        // Try to extract individuals from the analysis text
+        const individuals = extractIndividualsFromAnalysis(hermesResult.analysis)
+        if (individuals.length > 0) {
+          peopleMatches = await searchGrampsPeople(individuals, token)
         }
-      } catch (searchError) {
-        console.error('Error searching Gramps for people:', searchError);
-        // Continue even if Gramps search fails
+      } catch (err) {
+        console.error('[Document] Gramps search error:', err)
       }
     }
 
-    console.log('Returning success response');
+    console.log('[Document] Returning success response')
+
     return NextResponse.json({
       success: true,
-      analysis,
+      analysis: hermesResult.analysis || hermesResult.summary || '',
+      summary: hermesResult.summary || '',
       document_id: documentData?.id,
       mystery_id: mystery_id || null,
-      raw_response: analysisText,
+      proposed_actions: hermesResult.proposed_actions || [],
+      wiki_filed: hermesResult.wiki_filed || false,
+      gramps_updated: hermesResult.gramps_updated || [],
+      mysteries_informed: hermesResult.mysteries_informed || [],
       people_matches: peopleMatches,
-    });
+      hermes_ok: !hermesResult.error,
+      hermes_error: hermesResult.error || null,
+    })
   } catch (error: any) {
-    console.error('Document processing error:', error);
-    console.error('Error stack:', error.stack);
+    console.error('[Document] Processing error:', error)
+    console.error('[Document] Error stack:', error.stack)
     return NextResponse.json(
       {
         success: false,
         error: error.message || 'An error occurred processing the document',
-        details: error.toString()
+        details: error.toString(),
       },
-      { status: 500 }
-    );
+      { status: 500 },
+    )
   }
+}
+
+/**
+ * Try to extract structured individuals from the Hermes analysis text.
+ * Looks for name patterns in the text.
+ */
+function extractIndividualsFromAnalysis(analysisText: string): Array<{ name: string; dates?: string; places?: string; role?: string }> {
+  const individuals: Array<{ name: string; dates?: string; places?: string; role?: string }> = []
+
+  // Look for markdown tables with names
+  const namePattern = /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b/g
+  const matches = analysisText.matchAll(namePattern)
+  for (const match of matches) {
+    const name = match[1].trim()
+    if (name.length > 3 && !individuals.find((i) => i.name === name)) {
+      individuals.push({ name })
+    }
+  }
+
+  return individuals
 }

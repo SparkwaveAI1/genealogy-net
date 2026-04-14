@@ -6,7 +6,14 @@ import Link from 'next/link'
 interface Message {
   role: 'user' | 'assistant'
   content: string
+  provider?: string
 }
+
+const MODEL_OPTIONS = [
+  { key: 'gpt-4o-mini', label: 'GPT-4o mini', desc: 'Fast & affordable' },
+  { key: 'gemini-flash', label: 'Gemini Flash', desc: 'Fast & efficient' },
+  { key: 'llama-balanced', label: 'Groq Llama 3.3', desc: 'Most capable' },
+]
 
 interface Mystery {
   id: string
@@ -48,7 +55,13 @@ export default function Dashboard() {
   const [mysteries, setMysteries] = useState<Mystery[]>([])
   const [needsAttention, setNeedsAttention] = useState<Person[]>([])
   const [wikiActivity, setWikiActivity] = useState<string[]>([])
+  const [selectedModel, setSelectedModel] = useState('gpt-4o-mini')
+  const [modelMenuOpen, setModelMenuOpen] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const chatFileInputRef = useRef<HTMLInputElement>(null)
+
+  // Chat attachment state
+  const [chatAttachment, setChatAttachment] = useState<File | null>(null)
 
   // Document upload state
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
@@ -73,6 +86,15 @@ export default function Dashboard() {
   }, [messages])
 
   useEffect(() => {
+    if (!modelMenuOpen) return
+    const handler = (e: MouseEvent) => {
+      if (!(e.target as Element).closest('.model-menu')) setModelMenuOpen(false)
+    }
+    document.addEventListener('click', handler)
+    return () => document.removeEventListener('click', handler)
+  }, [modelMenuOpen])
+
+  useEffect(() => {
     // Load initial briefing and data
     loadBriefing()
     loadMysteries()
@@ -91,13 +113,14 @@ export default function Dashboard() {
             role: 'user',
             content: 'Generate a research briefing for today'
           }],
-          mode: 'briefing'
+          mode: 'briefing',
+          model: selectedModel,
         })
       })
 
       const data = await response.json()
       if (data.message) {
-        setMessages([{ role: 'assistant', content: data.message }])
+        setMessages([{ role: 'assistant', content: data.message, provider: data.provider }])
       }
     } catch (error) {
       console.error('Error loading briefing:', error)
@@ -142,25 +165,47 @@ export default function Dashboard() {
 
   const sendMessage = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!input.trim() || isLoading) return
+    if ((!input.trim() && !chatAttachment) || isLoading) return
 
-    const userMessage = input.trim()
+    const userMessage = input.trim() || (chatAttachment ? `[Attached file: ${chatAttachment.name}]` : '')
     setInput('')
-    setMessages(prev => [...prev, { role: 'user', content: userMessage }])
     setIsLoading(true)
 
-    try {
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: [...messages, { role: 'user', content: userMessage }]
-        })
-      })
+    // Optimistically add user message
+    const newUserMsg = { role: 'user' as const, content: userMessage }
+    setMessages(prev => [...prev, newUserMsg])
 
-      const data = await response.json()
-      if (data.message) {
-        setMessages(prev => [...prev, { role: 'assistant', content: data.message }])
+    try {
+      const allMessages = [...messages, newUserMsg]
+
+      if (chatAttachment) {
+        // Send with file attachment via FormData
+        const fd = new FormData()
+        fd.append('file', chatAttachment)
+        fd.append('messages', JSON.stringify(allMessages))
+        fd.append('model', selectedModel)
+
+        const response = await fetch('/api/chat', { method: 'POST', body: fd })
+        const data = await response.json()
+        if (data.message) {
+          setMessages(prev => [...prev, { role: 'assistant', content: data.message, provider: data.provider }])
+        } else if (data.error) {
+          setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${data.error}` }])
+        }
+        setChatAttachment(null)
+      } else {
+        // Normal JSON chat
+        const response = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messages: allMessages, model: selectedModel }),
+        })
+        const data = await response.json()
+        if (data.message) {
+          setMessages(prev => [...prev, { role: 'assistant', content: data.message, provider: data.provider }])
+        } else if (data.error) {
+          setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${data.error}` }])
+        }
       }
     } catch (error) {
       console.error('Error sending message:', error)
@@ -171,6 +216,17 @@ export default function Dashboard() {
     } finally {
       setIsLoading(false)
     }
+  }
+
+  const handleChatFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      setChatAttachment(e.target.files[0])
+    }
+  }
+
+  const handleChatFileClear = () => {
+    setChatAttachment(null)
+    if (chatFileInputRef.current) chatFileInputRef.current.value = ''
   }
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -306,7 +362,39 @@ export default function Dashboard() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <h1 className="text-[15px] font-semibold">Hermes</h1>
-              <span className="text-[11px] text-gray-500">Claude · <button className="text-[#EF9F27] hover:underline">swap model</button></span>
+              <span className="text-[11px] text-gray-500 flex items-center gap-1">
+                <span className="model-menu relative">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setModelMenuOpen(!modelMenuOpen) }}
+                    className="text-[#EF9F27] hover:underline flex items-center gap-0.5"
+                  >
+                    {MODEL_OPTIONS.find(m => m.key === selectedModel)?.label || 'GPT-4o mini'}
+                    <span className="text-[9px]">▼</span>
+                  </button>
+                  {modelMenuOpen && (
+                    <div className="absolute top-full left-0 mt-1 bg-white border border-[#D3D1C7] rounded-lg shadow-lg z-50 min-w-[180px]">
+                      {MODEL_OPTIONS.map(opt => (
+                        <button
+                          key={opt.key}
+                          onClick={() => { setSelectedModel(opt.key); setModelMenuOpen(false) }}
+                          className={`w-full text-left px-3 py-2 hover:bg-[#F5F2ED] ${selectedModel === opt.key ? 'font-semibold text-[#EF9F27]' : 'text-gray-700'} text-[11px]`}
+                        >
+                          <div className="font-medium">{opt.label}</div>
+                          <div className="text-[10px] text-gray-400">{opt.desc}</div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </span>
+                <span className="text-gray-300 mx-1">·</span>
+                <button
+                  onClick={() => { setInput('🔍 Ask Homer — type your deep research question here...') }}
+                  className="text-[#EF9F27] hover:underline"
+                  title="Ask Homer for deep research via Telegram"
+                >
+                  Ask Homer →
+                </button>
+              </span>
             </div>
           </div>
         </div>
@@ -326,6 +414,11 @@ export default function Dashboard() {
                   : 'bg-white border border-[#D3D1C7]'
               } rounded-lg px-4 py-3 text-[13px]`}>
                 {msg.content}
+                {msg.role === 'assistant' && msg.provider && (
+                  <div className="text-[9px] text-gray-400 mt-1 pt-1 border-t border-[#E5E5E5]">
+                    via {msg.provider}
+                  </div>
+                )}
               </div>
             </div>
           ))}
@@ -342,14 +435,61 @@ export default function Dashboard() {
         {/* Input */}
         <div className="p-4 border-t border-[#D3D1C7] bg-white">
           <form onSubmit={sendMessage}>
-            <input
-              type="text"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder="Ask Hermes anything..."
-              className="w-full px-4 py-2 border border-[#D3D1C7] rounded-lg focus:outline-none focus:border-[#EF9F27] text-[13px]"
-              disabled={isLoading}
-            />
+            {/* Attachment preview */}
+            {chatAttachment && (
+              <div className="mb-2 flex items-center gap-2">
+                {chatAttachment.type.startsWith('image/') ? (
+                  <img
+                    src={URL.createObjectURL(chatAttachment)}
+                    alt={chatAttachment.name}
+                    className="w-12 h-12 object-cover rounded border border-[#D3D1C7]"
+                  />
+                ) : (
+                  <div className="w-12 h-12 flex items-center justify-center bg-[#F5F2ED] rounded border border-[#D3D1C7] text-[10px] text-gray-500 text-center px-1">
+                    {chatAttachment.name.slice(0, 12)}
+                  </div>
+                )}
+                <div className="flex-1 text-[11px] text-gray-600 truncate">{chatAttachment.name}</div>
+                <button
+                  type="button"
+                  onClick={handleChatFileClear}
+                  className="text-gray-400 hover:text-red-500 text-sm"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+            <div className="flex gap-2">
+              {/* Hidden file input with label wrapper */}
+              <label
+                className="flex-shrink-0 px-3 py-2 border border-[#D3D1C7] rounded-lg hover:bg-[#F5F2ED] text-gray-500 text-[13px] cursor-pointer"
+                title="Attach file"
+              >
+                📎
+                <input
+                  ref={chatFileInputRef}
+                  type="file"
+                  accept="image/*,application/pdf,text/*,.txt,.md,.csv"
+                  onChange={handleChatFileSelect}
+                  className="hidden"
+                />
+              </label>
+              <input
+                type="text"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder="Ask Hermes anything..."
+                className="flex-1 px-4 py-2 border border-[#D3D1C7] rounded-lg focus:outline-none focus:border-[#EF9F27] text-[13px]"
+                disabled={isLoading}
+              />
+              <button
+                type="submit"
+                disabled={isLoading || (!input.trim() && !chatAttachment)}
+                className="flex-shrink-0 px-4 py-2 bg-[#EF9F27] text-white rounded-lg hover:bg-[#D88E1F] disabled:opacity-50 text-[13px] font-medium"
+              >
+                {isLoading ? '...' : '→'}
+              </button>
+            </div>
           </form>
         </div>
       </div>
