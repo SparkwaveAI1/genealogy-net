@@ -1,21 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { AIChatRouter } from '@/lib/ai-router';
 import { AIMessage } from '@/lib/ai-models';
-import { createClient } from '@supabase/supabase-js';
-import { writeFile, mkdir, readFile, appendFile } from 'fs/promises';
-import { existsSync } from 'fs';
-
-const WIKI_RAW = '/root/genealogy-wiki/raw';
-const WIKI_SOURCES = '/root/genealogy-wiki/wiki/sources';
-const WIKI_INDEX = '/root/genealogy-wiki/index.md';
-const WIKI_LOG = '/root/genealogy-wiki/log.md';
-
-function getServiceClient() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://oxpkqnmuwqcnmzvavsuz.supabase.co',
-    process.env.SUPABASE_SERVICE_ROLE_KEY || ''
-  );
-}
+import { supabaseService } from '@/lib/supabase-service';
+import path from 'path';
 
 const GENEALOGY_SYSTEM_PROMPT = `You are a genealogy research assistant specializing in the Johnson-Schoenberg-Sackerson family history.
 
@@ -77,7 +64,7 @@ function checkRateLimit(key: string): boolean {
 
   entry.timestamps.push(now);
   entry.count = entry.timestamps.length;
-  rateLimitMap.set(key, entry);
+  rateLimitMap.set(key, { count: entry.count, timestamps: entry.timestamps });
 
   return true;
 }
@@ -109,115 +96,181 @@ export async function POST(req: NextRequest) {
   }
 }
 
-/**
- * File a document to the genealogy wiki.
- * Copies raw file, creates source page, updates index and log.
- */
-async function fileToWiki(fileName: string, mimeType: string, buffer: Buffer): Promise<{ slug: string; rawPath: string; error?: string }> {
-  const slug = `${new Date().toISOString().slice(0, 10)}-${fileName.replace(/[^a-zA-Z0-9.-]/g, '-').substring(0, 60)}`;
-  const ext = mimeType.split('/')[1]?.split(';')[0] || 'bin';
-  const rawFileName = `${slug}.${ext}`;
-  const rawPath = `${WIKI_RAW}/${rawFileName}`;
-  const sourcePath = `${WIKI_SOURCES}/${slug}.md`;
+// ──────────────────────────────────────────────────────────────────────────
+// Upload file → Supabase Storage + documents table
+// ──────────────────────────────────────────────────────────────────────────
 
-  try {
-    if (!existsSync(WIKI_RAW)) await mkdir(WIKI_RAW, { recursive: true });
-    if (!existsSync(WIKI_SOURCES)) await mkdir(WIKI_SOURCES, { recursive: true });
+async function saveUploadToSupabase(file: File, buffer: Buffer): Promise<{ documentId: string; filePath: string }> {
+  const ext = path.extname(file.name).toLowerCase() || '.' + file.name.split('.').pop();
+  const slug = `${new Date().toISOString().slice(0, 10)}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '-').substring(0, 50)}`;
+  const storagePath = `raw/${new Date().toISOString().slice(0, 7)}/${slug}${ext}`;
 
-    await writeFile(rawPath, buffer);
-    console.log(`[Wiki] Copied raw file to ${rawPath}`);
+  const { error: uploadError } = await supabaseService.storage
+    .from('documents')
+    .upload(storagePath, buffer, { contentType: file.type, upsert: false });
 
-    const docType = mimeType.startsWith('image/') ? 'photo'
-      : mimeType === 'application/pdf' ? 'document'
-      : mimeType.startsWith('text/') ? 'text'
-      : 'other';
-
-    const sourceContent = `---
-title: "${fileName.replace(/"/g, '\\"')}"
-type: ${docType}
-date: "${new Date().toISOString().slice(0, 10)}"
-key_people: []
-gramps_ids: []
-confidence: unverified
-source_file: "${rawPath}"
-intake_method: chat-paperclip
----
-
-# ${fileName}
-
-**Intake method:** Chat paperclip attachment
-**MIME type:** ${mimeType}
-**Original file:** ${fileName}
-
-## Summary
-
-*(Awaiting AI analysis — see chat thread for context)*
-
-## Source Classification
-
-- **Original/Derived/Authored:** Unverified
-- **Primary/Secondary:** Unverified
-- **Direct/Indirect evidence:** Unverified
-
-## Raw File
-
-\`${rawPath}\`
-`;
-    await writeFile(sourcePath, sourceContent);
-    console.log(`[Wiki] Created source page at ${sourcePath}`);
-
-    if (existsSync(WIKI_INDEX)) {
-      const indexContent = await readFile(WIKI_INDEX, 'utf-8');
-      const newEntry = `\n- **${fileName}** — ${docType} — chat paperclip (${new Date().toISOString().slice(0, 10)})`;
-      await writeFile(WIKI_INDEX, indexContent.replace(/(## Sources\n)/, `$1${newEntry}`));
-    }
-
-    const logEntry = `\n## ${new Date().toISOString()} — Chat paperclip intake: ${fileName}\n- Raw: ${rawPath}\n- Source: ${sourcePath}\n`;
-    await appendFile(WIKI_LOG, logEntry);
-
-    return { slug, rawPath };
-  } catch (err: any) {
-    console.error('[Wiki] Filing error:', err.message);
-    return { slug, rawPath, error: err.message };
+  if (uploadError) {
+    throw new Error(`Storage upload failed: ${uploadError.message}`);
   }
+
+  const { data: urlData } = supabaseService.storage.from('documents').getPublicUrl(storagePath);
+
+  const docType = file.type.startsWith('image/') ? 'photo'
+    : file.type === 'application/pdf' ? 'document'
+    : file.type.startsWith('text/') ? 'text'
+    : 'other';
+
+  const { data: docData, error: docError } = await supabaseService
+    .from('documents')
+    .insert([
+      {
+        title: file.name,
+        document_type: docType,
+        description: '[Chat paperclip attachment]',
+        date: new Date().toISOString(),
+        file_path: storagePath,
+        url: urlData?.publicUrl || null,
+      },
+    ])
+    .select('id')
+    .single();
+
+  if (docError || !docData) {
+    throw new Error(`Document record creation failed: ${docError?.message || 'no id returned'}`);
+  }
+
+  return { documentId: docData.id, filePath: storagePath };
 }
 
-/**
- * Process an upload file for AI consumption.
- * Accepts optional pre-read buffer to avoid re-reading.
- */
+// ──────────────────────────────────────────────────────────────────────────
+// Text extraction from buffer
+// ──────────────────────────────────────────────────────────────────────────
 
-async function processUploadFile(file: File, buffer?: Buffer): Promise<{ text?: string; base64?: string; mimeType?: string; error?: string }> {
-  const buf = buffer || Buffer.from(await file.arrayBuffer());
-  const mimeType = file.type;
+const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.tiff', '.heic']);
+const TEXT_EXTS = new Set(['.txt', '.md', '.csv', '.rt', '.ged', '.gedcom']);
 
-  if (mimeType.startsWith('image/')) {
-    return { base64: buf.toString('base64'), mimeType };
+async function extractText(buffer: Buffer, ext: string, mimeType: string, fileName: string): Promise<string> {
+  if (IMAGE_EXTS.has(ext)) {
+    return `[IMAGE FILE]`;
   }
 
-  if (mimeType === 'application/pdf') {
-    // GPT-4o supports PDFs natively as document input - pass as base64
-    return { base64: buf.toString('base64'), mimeType };
-  }
-
-  if (mimeType.startsWith('text/') || file.name.endsWith('.txt') || file.name.endsWith('.md') || file.name.endsWith('.csv')) {
-    return { text: buf.toString('utf-8').substring(0, 10000) };
-  }
-
-  if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || file.name.endsWith('.docx')) {
+  if (ext === '.pdf') {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const mammoth = (await import('mammoth')) as any;
-      const result = await mammoth.extractRawText({ buffer: buf });
-      const text = result.value.substring(0, 10000);
-      return { text: `[DOCX extracted text]\n${text}` };
-    } catch (err: any) {
-      return { error: `DOCX extraction failed: ${err.message}` };
+      const fs = require('fs');
+      const { exec } = require('child_process');
+      const { promisify } = require('util');
+      const execAsync = promisify(exec);
+
+      const tmpPath = `/tmp/doc-${Date.now()}.pdf`;
+      fs.writeFileSync(tmpPath, buffer);
+      const { stdout } = await execAsync(`pdftotext -layout "${tmpPath}" - 2>/dev/null`, { timeout: 30000 });
+      fs.unlinkSync(tmpPath);
+      if (stdout.trim()) return stdout.trim();
+    } catch {
+      // pdftotext failed
+    }
+    return `[PDF FILE (scanned or pdftotext failed)]`;
+  }
+
+  if (TEXT_EXTS.has(ext) || mimeType.startsWith('text/')) {
+    return buffer.toString('utf-8');
+  }
+
+  if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || fileName.endsWith('.docx')) {
+    try {
+      const mammoth = require('mammoth');
+      const result = await mammoth.extractRawText({ buffer });
+      return result.value;
+    } catch {
+      return `[DOCX extraction failed]`;
     }
   }
 
-  return { error: `Unsupported file type: ${mimeType}. Supported: images, PDFs, DOCX, and text files.` };
+  return `[UNSUPPORTED FILE TYPE: ${mimeType}]`;
 }
+
+// ──────────────────────────────────────────────────────────────────────────
+// Look up recent documents from Supabase and include content in context
+// ──────────────────────────────────────────────────────────────────────────
+
+async function attachRecentDocuments(messages: any[], supabase: typeof supabaseService): Promise<any[]> {
+  // Find the last user message content
+  const lastUserMsg = [...messages].reverse().find((m: any) => m.role === 'user');
+  if (!lastUserMsg) return messages;
+
+  const userText = (lastUserMsg.content || '').toLowerCase();
+
+  // Check if user is asking about a document (keywords)
+  const docKeywords = ['document', 'file', 'upload', 'paper', 'record', 'that', 'this', 'it'];
+  const isAskingAboutDoc = docKeywords.some(k => userText.includes(k));
+
+  if (!isAskingAboutDoc) return messages;
+
+  // Fetch recent documents
+  const { data: recentDocs, error } = await supabase
+    .from('documents')
+    .select('id, title, file_path, document_type, date')
+    .order('created_at', { ascending: false })
+    .limit(5);
+
+  if (error || !recentDocs || recentDocs.length === 0) return messages;
+
+  // Try to find the most relevant document
+  let targetDoc = recentDocs[0]; // default to most recent
+
+  // Try to match by filename in user message
+  for (const doc of recentDocs) {
+    const docName = doc.title.toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (userText.includes(docName.substring(0, 10))) {
+      targetDoc = doc;
+      break;
+    }
+  }
+
+  if (!targetDoc?.file_path) return messages;
+
+  // Download from Supabase Storage
+  const { data: buffer, error: downloadError } = await supabase.storage
+    .from('documents')
+    .download(targetDoc.file_path);
+
+  if (downloadError || !buffer) {
+    console.error('[Chat] Document download error:', downloadError?.message);
+    return messages;
+  }
+
+  const buf = Buffer.from(await buffer.arrayBuffer());
+  const ext = path.extname(targetDoc.file_path).toLowerCase();
+  const content = await extractText(buf, ext, buffer.type || '', targetDoc.title);
+
+  // Attach document content to the last user message
+  const enrichedMsg = {
+    ...lastUserMsg,
+    content: `${lastUserMsg.content}
+
+--- DOCUMENT CONTEXT ---
+The user is referring to: "${targetDoc.title}"
+Document date: ${targetDoc.date || 'unknown'}
+Document type: ${targetDoc.document_type}
+
+Document content:
+${content}
+--- END DOCUMENT CONTEXT ---`,
+  };
+
+  // Replace the message in the array
+  const result = [...messages];
+  const msgIndex = result.findIndex((m, i) => i === messages.length - 1 && m.role === 'user');
+  if (msgIndex !== -1) {
+    result[msgIndex] = enrichedMsg;
+  }
+
+  return result;
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Handle paperclip file upload in chat
+// ──────────────────────────────────────────────────────────────────────────
 
 async function handleFileChat(req: NextRequest) {
   const formData = await req.formData();
@@ -235,65 +288,49 @@ async function handleFileChat(req: NextRequest) {
   }
 
   const messages: any[] = JSON.parse(messagesJson);
-  const bytes = await file.arrayBuffer();
-  const buffer = Buffer.from(bytes);
+  const buffer = Buffer.from(await file.arrayBuffer());
 
-  // Process file for AI (text extraction)
-  const processedFile = await processUploadFile(file, buffer);
-  console.log('[Chat] processUploadFile result:', JSON.stringify(processedFile).substring(0, 200));
-
-  if (processedFile.error) {
-    return NextResponse.json({ error: processedFile.error }, { status: 400 });
+  // Save to Supabase Storage + documents table
+  let savedDocId: string | null = null;
+  try {
+    const { documentId } = await saveUploadToSupabase(file, buffer);
+    savedDocId = documentId;
+    console.log('[Chat] Document saved to Supabase:', documentId);
+  } catch (err: any) {
+    console.error('[Chat] Document save failed:', err.message);
+    // Continue anyway — the AI can still analyze the file content directly
   }
 
-  // Attach processed file content to last user message for AI
-  if (processedFile.base64 && processedFile.mimeType) {
-    const lastUserMsg = [...messages].reverse().find((m: any) => m.role === 'user');
-    if (lastUserMsg) {
-      if (processedFile.mimeType === 'application/pdf') {
-        lastUserMsg.documentBase64 = processedFile.base64;
-        lastUserMsg.documentMimeType = processedFile.mimeType;
-        console.log('[Chat] Attached PDF as document, base64 length:', processedFile.base64.length);
-      } else if (processedFile.mimeType.startsWith('image/')) {
-        lastUserMsg.imageBase64 = processedFile.base64;
-        lastUserMsg.imageMimeType = processedFile.mimeType;
-        console.log('[Chat] Attached image base64 to message, length:', processedFile.base64.length);
-      }
-    }
-  } else if (processedFile.text) {
-    const lastUserMsg = [...messages].reverse().find((m: any) => m.role === 'user');
-    if (lastUserMsg) {
-      const originalContent = lastUserMsg.content;
-      lastUserMsg.content = `${lastUserMsg.content}\n\n--- BEGIN ATTACHED FILE (${file.name}) ---\n${processedFile.text}\n--- END ATTACHED FILE ---`;
-      console.log('[Chat] Attached text to message. Original length:', originalContent.length, 'New length:', lastUserMsg.content.length);
-      console.log('[Chat] Message preview:', lastUserMsg.content.substring(0, 300));
-    }
-  }
+  // Extract text from the buffer
+  const ext = path.extname(file.name).toLowerCase();
+  const extractedText = await extractText(buffer, ext, file.type, file.name);
 
-  // File to wiki and save to GRIP Supabase — fire and forget after AI response
-  const wikiPromise = fileToWiki(file.name, file.type, buffer);
-  const supabasePromise = (async () => {
-    try {
-      const sb = getServiceClient();
-      await sb.from('documents').insert([{
-        title: file.name,
-        document_type: file.type.startsWith('image/') ? 'photo' : file.type === 'application/pdf' ? 'document' : 'text',
-        description: '[Chat paperclip attachment]',
-        document_date: new Date().toISOString(),
-      }]);
-    } catch (err: any) {
-      console.error('[Supabase] Document save error:', err.message);
-    }
-  })();
+  // Attach file content to last user message
+  const lastUserMsgIndex = [...messages].reverse().findIndex((m: any) => m.role === 'user');
+  const actualIndex = lastUserMsgIndex >= 0 ? messages.length - 1 - lastUserMsgIndex : -1;
+
+  if (actualIndex !== -1) {
+    const docContext = savedDocId
+      ? `\n\n[Attached document saved as ID: ${savedDocId}]`
+      : '';
+
+    const textContext = extractedText.startsWith('[UNSUPPORTED') || extractedText.startsWith('[PDF FILE')
+      ? `\n\n${extractedText}${docContext}`
+      : `\n\n--- BEGIN ATTACHED FILE (${file.name}) ---\n${extractedText}\n--- END ATTACHED FILE ---${docContext}`;
+
+    messages[actualIndex] = {
+      ...messages[actualIndex],
+      content: messages[actualIndex].content + textContext,
+    };
+  }
 
   const result = await handleJsonChat({ messages, model, deep, mode });
-
-  // Best-effort: await wiki/supabase after AI response
-  wikiPromise.then(r => { if (!r.error) console.log(`[Chat] Wiki filed: ${r.rawPath}`); }).catch(() => {});
-  supabasePromise.catch(() => {});
-
   return result;
 }
+
+// ──────────────────────────────────────────────────────────────────────────
+// Handle regular JSON chat with optional document context
+// ──────────────────────────────────────────────────────────────────────────
 
 async function handleJsonChat(body: any) {
   const { messages, deep, mode, mystery_context, location_context, model } = body;
@@ -301,6 +338,9 @@ async function handleJsonChat(body: any) {
   if (!messages || !Array.isArray(messages)) {
     return NextResponse.json({ error: 'Messages array is required' }, { status: 400 });
   }
+
+  // Look up relevant documents from Supabase and attach content
+  const messagesWithDocs = await attachRecentDocuments(messages, supabaseService);
 
   let systemPrompt = GENEALOGY_SYSTEM_PROMPT;
 
@@ -320,7 +360,7 @@ Compose a brief morning research briefing highlighting any important items that 
     systemPrompt = `LOCATION CONTEXT:\n${JSON.stringify(location_context, null, 2)}\n\n` + systemPrompt;
   }
 
-  const aiMessages: AIMessage[] = messages.map((msg: any) => ({
+  const aiMessages: AIMessage[] = messagesWithDocs.map((msg: any) => ({
     role: msg.role || 'user',
     content: msg.content || msg.text || '',
     imageBase64: msg.imageBase64,
