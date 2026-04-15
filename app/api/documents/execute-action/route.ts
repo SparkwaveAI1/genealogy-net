@@ -61,11 +61,11 @@ async function upsertPersonEvent(
   eventType: string,
   dateStr: string,
   documentId?: string,
-): Promise<void> {
+): Promise<string> {
   const dateObj = parseDateToGramps(dateStr)
   if (!dateObj) {
     console.warn(`[upsertPersonEvent] Could not parse date: "${dateStr}"`)
-    return
+    return 'skipped (unparseable date)'
   }
 
   // Search for existing event of this type on this person
@@ -73,6 +73,7 @@ async function upsertPersonEvent(
   if (person.event_ref_list) {
     for (const ref of person.event_ref_list) {
       try {
+        // NO trailing slash on events endpoint
         const evt = await grampsRequest<any>(`/events/${ref.ref}`)
         const evtType = typeof evt.type === 'string' ? evt.type : evt.type?.string || ''
         if (evtType.toLowerCase() === eventType.toLowerCase()) {
@@ -84,31 +85,36 @@ async function upsertPersonEvent(
   }
 
   if (existingEventHandle) {
-    // Update existing event's date
+    // Update existing event's date — need full object, no trailing slash
+    const existing = await grampsRequest<any>(`/events/${existingEventHandle}`)
     await grampsRequest(`/events/${existingEventHandle}`, {
       method: 'PUT',
-      body: JSON.stringify({ date: dateObj }),
+      body: JSON.stringify({ ...existing, date: dateObj }),
     })
     console.log(`[upsertPersonEvent] Updated ${eventType} date for ${person.gramps_id}`)
+    return `updated ${eventType}`
   } else {
-    // Create new event
-    const newEvent = await grampsRequest<any>('/events/', {
+    // Create new event — POST returns transaction list
+    const txResult = await grampsRequest<any[]>('/events/', {
       method: 'POST',
       body: JSON.stringify({
+        _class: 'Event',
         type: eventType,
         date: dateObj,
         description: `${eventType} (from document analysis)`,
       }),
     })
-    
-    // Link event to person
-    const newRef = { ref: newEvent.handle, role: 'Primary' }
-    const updatedRefs = [...(person.event_ref_list || []), newRef]
-    await updatePerson(person.gramps_id, {
-      ...person,
-      event_ref_list: updatedRefs,
+    const newEventHandle = txResult[0]?.handle
+    if (!newEventHandle) throw new Error('Failed to create event: no handle returned')
+
+    // Link event to person — update the full person object
+    const updatedRefs = [...(person.event_ref_list || []), { _class: 'EventRef', ref: newEventHandle, role: 'Primary' }]
+    await grampsRequest(`/people/${person.handle}`, {
+      method: 'PUT',
+      body: JSON.stringify({ ...person, event_ref_list: updatedRefs }),
     })
     console.log(`[upsertPersonEvent] Created ${eventType} event and linked to ${person.gramps_id}`)
+    return `created ${eventType} event`
   }
 }
 

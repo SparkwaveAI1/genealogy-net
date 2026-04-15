@@ -413,16 +413,80 @@ export async function createPerson(data: {
   primary_name: { first_name: string; surname_list: Array<{ surname: string }> }
   birth_date?: string
   death_date?: string
-}): Promise<{ gramps_id: string }> {
+}): Promise<{ gramps_id: string; handle: string }> {
   const payload = {
-    ...data,
-    gramps_id: 'new',
+    _class: 'Person',
+    primary_name: {
+      _class: 'Name',
+      ...data.primary_name,
+      surname_list: data.primary_name.surname_list.map(s => ({ _class: 'Surname', ...s })),
+    },
+    gender: 1,
   }
-  const result = await grampsRequest<any>('/people/', {
+  const result = await grampsRequest<any[]>('/people/', {
     method: 'POST',
     body: JSON.stringify(payload),
   })
-  return { gramps_id: result.gramps_id || result.id }
+  // POST returns a transaction list with the handle
+  const handle = result[0]?.handle
+  // Fetch the created person to get the gramps_id
+  const people = await grampsRequest<GrampsPerson[]>(`/people/?handle=${handle}`)
+  const gramps_id = people?.[0]?.gramps_id || ''
+  return { gramps_id, handle }
+}
+
+/**
+ * Create an event in Gramps (Birth, Death, Marriage, etc.)
+ */
+export async function createEvent(event: {
+  type: string
+  date?: { year: number; month?: number; day?: number }
+  description?: string
+  place?: string
+}): Promise<{ handle: string }> {
+  const dateval = event.date
+    ? [event.date.month || 0, event.date.day || 0, event.date.year, false]
+    : undefined
+
+  const payload: any = {
+    _class: 'Event',
+    type: event.type,
+    description: event.description || '',
+  }
+  if (dateval) {
+    payload.date = { _class: 'Date', dateval, calendar: 0, modifier: 0, format: null, quality: 0, textval: '' }
+  }
+
+  const result = await grampsRequest<any[]>('/events/', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+  return { handle: result[0]?.handle }
+}
+
+/**
+ * Add an event reference to a person (links event to person)
+ */
+export async function addEventToPerson(grampsId: string, eventHandle: string, role: string = 'Primary'): Promise<void> {
+  const people = await grampsRequest<GrampsPerson[]>(`/people/?gramps_id=${grampsId}`)
+  if (!people || people.length === 0) throw new Error(`Person ${grampsId} not found`)
+  const person = people[0]
+
+  // Check if event already linked
+  const existing = (person.event_ref_list || []).find((e: any) => e.ref === eventHandle)
+  if (existing) return
+
+  person.event_ref_list = person.event_ref_list || []
+  person.event_ref_list.push({
+    _class: 'EventRef',
+    ref: eventHandle,
+    role,
+  } as any)
+
+  await grampsRequest<any>(`/people/${person.handle}`, {
+    method: 'PUT',
+    body: JSON.stringify(person),
+  })
 }
 
 /**
