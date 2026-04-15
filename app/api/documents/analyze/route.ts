@@ -220,11 +220,31 @@ export async function POST(req: NextRequest) {
       const buf = Buffer.from(arrayBuffer)
       imageBase64 = buf.toString('base64')
       imageMimeType = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : ext === '.gif' ? 'image/gif' : 'image/jpeg'
+    } else if (ext === '.pdf') {
+      // For PDFs: try text extraction first; if it fails, send PDF to Gemini for OCR
+      const arrayBuffer = await fileBuffer.arrayBuffer()
+      const buf = Buffer.from(arrayBuffer)
+      content = await extractTextFromBuffer(buf, ext)
+
+      if (content.startsWith('[PDF FILE')) {
+        // Text extraction failed (scanned/image PDF).
+        // Send the raw PDF to Gemini, which supports application/pdf natively for OCR.
+        console.log('[Analyze] PDF text extraction failed, sending raw PDF to Gemini for OCR')
+        imageBase64 = buf.toString('base64')
+        imageMimeType = 'application/pdf'
+        content = undefined  // will use image prompt instead
+      } else if (content.startsWith('[UNSUPPORTED')) {
+        return NextResponse.json({
+          error: content,
+          file_path: filePath,
+          needs_visual_analysis: true,
+        }, { status: 422 })
+      }
     } else {
       const arrayBuffer = await fileBuffer.arrayBuffer()
       const buf = Buffer.from(arrayBuffer)
       content = await extractTextFromBuffer(buf, ext)
-      if (content.startsWith('[UNSUPPORTED') || content.startsWith('[PDF FILE')) {
+      if (content.startsWith('[UNSUPPORTED')) {
         return NextResponse.json({
           error: content,
           file_path: filePath,
@@ -235,10 +255,13 @@ export async function POST(req: NextRequest) {
 
     // ──────────────────────────────────────────────────────────────────────────
     // Call AI for GPS analysis
+    // Use Gemini when we have image/PDF data (it supports inline PDF + images).
+    // Otherwise use the default deep model.
     // ──────────────────────────────────────────────────────────────────────────
+    const hasVisualData = !!(imageBase64 && imageMimeType)
     const prompt = buildGPSAnalysisPrompt(
       doc.title || 'unknown',
-      content || '[IMAGE — see attached image for visual analysis]',
+      content || '[DOCUMENT IMAGE — visually analyze this document and extract all genealogically relevant information]',
       fileType,
       linkedPersonName || undefined,
       undefined
@@ -249,14 +272,23 @@ export async function POST(req: NextRequest) {
     const aiMessages: any[] = [{
       role: 'user',
       content: prompt,
-      ...(imageBase64 ? { imageBase64, imageMimeType } : {}),
+      ...(hasVisualData ? { imageBase64, imageMimeType } : {}),
     }]
 
-    const result = await routeChat(
-      aiMessages,
-      { deep: true },
-      { system: systemPrompt, max_tokens: 4000 }
-    )
+    // When sending visual data (image or PDF), route directly to Gemini which
+    // supports inline images and PDFs. Otherwise use default deep routing.
+    let result: any
+    if (hasVisualData) {
+      const { createProvider } = await import('@/lib/ai-models')
+      const gemini = createProvider('gemini')
+      const geminiResult = await gemini.chat(aiMessages, {
+        system: systemPrompt,
+        max_tokens: 4000,
+      })
+      result = { message: geminiResult.message, raw: geminiResult.raw, provider: 'gemini' }
+    } else {
+      result = await routeChat(aiMessages, { deep: true }, { system: systemPrompt, max_tokens: 4000 })
+    }
 
     if (result.error || !result.message) {
       return NextResponse.json({ error: result.error || 'AI analysis failed' }, { status: 500 })
