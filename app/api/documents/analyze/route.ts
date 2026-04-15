@@ -275,17 +275,50 @@ export async function POST(req: NextRequest) {
       ...(hasVisualData ? { imageBase64, imageMimeType } : {}),
     }]
 
-    // When sending visual data (image or PDF), route directly to Gemini which
-    // supports inline images and PDFs. Otherwise use default deep routing.
+    // When sending visual data (image or PDF), use OpenAI with appropriate input method.
+    // PDFs: upload via File API, then reference file_id in message.
+    // Images: send inline via image_url.
+    // Otherwise: use default deep routing (Groq Llama).
     let result: any
     if (hasVisualData) {
-      const { createProvider } = await import('@/lib/ai-models')
-      const gemini = createProvider('gemini')
-      const geminiResult = await gemini.chat(aiMessages, {
-        system: systemPrompt,
+      const { OpenAI } = await import('openai')
+      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+
+      let messageContent: any[]
+      if (imageMimeType === 'application/pdf') {
+        // Upload PDF to OpenAI File API
+        const buf = Buffer.from(imageBase64!, 'base64')
+        const uploadedFile = await openai.files.create({
+          file: new File([buf], 'document.pdf', { type: 'application/pdf' }),
+          purpose: 'user_data',
+        })
+        messageContent = [
+          { type: 'file' as const, file: { file_id: uploadedFile.id } },
+          { type: 'text' as const, text: prompt },
+        ]
+      } else {
+        // Image: send inline
+        messageContent = [
+          { type: 'image_url' as const, image_url: { url: `data:${imageMimeType};base64,${imageBase64}` } },
+          { type: 'text' as const, text: prompt },
+        ]
+      }
+
+      const completion = await openai.chat.completions.create({
+        model: 'gpt-4o',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: messageContent },
+        ],
         max_tokens: 4000,
+        temperature: 0.7,
       })
-      result = { message: geminiResult.message, raw: geminiResult.raw, provider: 'gemini' }
+
+      result = {
+        message: completion.choices[0]?.message?.content || '',
+        raw: completion,
+        provider: 'openai',
+      }
     } else {
       result = await routeChat(aiMessages, { deep: true }, { system: systemPrompt, max_tokens: 4000 })
     }
