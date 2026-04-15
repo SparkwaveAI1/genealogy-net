@@ -75,7 +75,7 @@ export async function getToken(): Promise<string> {
 /**
  * Make authenticated request to Gramps API
  */
-async function grampsRequest<T>(endpoint: string, options?: RequestInit): Promise<T> {
+export async function grampsRequest<T>(endpoint: string, options?: RequestInit): Promise<T> {
   const token = await getToken()
   const url = `${GRAMPS_API_URL}${endpoint}`
   console.log('grampsRequest URL:', url)
@@ -394,9 +394,15 @@ export async function getEvent(handleOrId: string): Promise<GrampsEvent> {
  * Update person data
  */
 export async function updatePerson(grampsId: string, data: Partial<GrampsPerson>): Promise<GrampsPerson> {
-  return grampsRequest<GrampsPerson>(`/people/${grampsId}/`, {
+  // Gramps API requires: no trailing slash, full person object in body
+  // First fetch the current person, then merge changes
+  const people = await grampsRequest<GrampsPerson[]>(`/people/?gramps_id=${grampsId}`)
+  if (!people || people.length === 0) throw new Error(`Person ${grampsId} not found`)
+  const current = people[0]
+  const merged = { ...current, ...data }
+  return grampsRequest<GrampsPerson>(`/people/${current.handle}`, {
     method: 'PUT',
-    body: JSON.stringify(data),
+    body: JSON.stringify(merged),
   })
 }
 

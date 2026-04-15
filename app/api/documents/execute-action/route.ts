@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseService } from '@/lib/supabase-service'
-import { updatePerson, createPerson, getPerson } from '@/lib/gramps'
+import { updatePerson, createPerson, getPerson, grampsRequest } from '@/lib/gramps'
 import path from 'path'
 
 function slugify(name: string): string {
@@ -15,30 +15,168 @@ function slugify(name: string): string {
 // Gramps actions — these already work over HTTP
 // ──────────────────────────────────────────────────────────────────────────
 
+/**
+ * Parse a date string like "about 1755", "circa 1790", "12 Mar 1847" into
+ * Gramps date format: { dateval: [day, month, year, quality] }
+ */
+function parseDateToGramps(dateStr: string): { dateval: number[] } | null {
+  if (!dateStr) return null
+  const s = dateStr.toLowerCase().trim()
+  
+  let quality = 0 // 0=exact, 1=estimated, 2=calculated
+  if (s.includes('about') || s.includes('circa') || s.includes('c.') || s.includes('abt')) {
+    quality = 1
+  }
+  
+  // Try to extract year
+  const yearMatch = s.match(/(\d{3,4})/)
+  if (!yearMatch) return null
+  const year = parseInt(yearMatch[1])
+  
+  // Try to extract month
+  const monthNames = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec']
+  let month = 0
+  for (let i = 0; i < monthNames.length; i++) {
+    if (s.includes(monthNames[i])) { month = i + 1; break }
+  }
+  
+  // Try to extract day
+  const dayMatch = s.match(/\b(\d{1,2})\b/)
+  const day = month > 0 && dayMatch ? parseInt(dayMatch[1]) : 0
+  
+  // dateval: [day, month, year, quality] — see Gramps date format
+  // Quality: 0=regular, 1=estimated, 2=calculated
+  // For "about 1755": [0, 0, 1755, 1]
+  // For "12 Mar 1847": [12, 3, 1847, 0]
+  return { dateval: [day, month, year, quality] }
+}
+
+/**
+ * Create or update a person's event (Birth, Death, etc).
+ * If the person already has an event of this type, update the date.
+ * If not, create a new event and link it to the person.
+ */
+async function upsertPersonEvent(
+  person: any,
+  eventType: string,
+  dateStr: string,
+  documentId?: string,
+): Promise<void> {
+  const dateObj = parseDateToGramps(dateStr)
+  if (!dateObj) {
+    console.warn(`[upsertPersonEvent] Could not parse date: "${dateStr}"`)
+    return
+  }
+
+  // Search for existing event of this type on this person
+  let existingEventHandle: string | null = null
+  if (person.event_ref_list) {
+    for (const ref of person.event_ref_list) {
+      try {
+        const evt = await grampsRequest<any>(`/events/${ref.ref}`)
+        const evtType = typeof evt.type === 'string' ? evt.type : evt.type?.string || ''
+        if (evtType.toLowerCase() === eventType.toLowerCase()) {
+          existingEventHandle = ref.ref
+          break
+        }
+      } catch { /* skip unresolvable refs */ }
+    }
+  }
+
+  if (existingEventHandle) {
+    // Update existing event's date
+    await grampsRequest(`/events/${existingEventHandle}`, {
+      method: 'PUT',
+      body: JSON.stringify({ date: dateObj }),
+    })
+    console.log(`[upsertPersonEvent] Updated ${eventType} date for ${person.gramps_id}`)
+  } else {
+    // Create new event
+    const newEvent = await grampsRequest<any>('/events/', {
+      method: 'POST',
+      body: JSON.stringify({
+        type: eventType,
+        date: dateObj,
+        description: `${eventType} (from document analysis)`,
+      }),
+    })
+    
+    // Link event to person
+    const newRef = { ref: newEvent.handle, role: 'Primary' }
+    const updatedRefs = [...(person.event_ref_list || []), newRef]
+    await updatePerson(person.gramps_id, {
+      ...person,
+      event_ref_list: updatedRefs,
+    })
+    console.log(`[upsertPersonEvent] Created ${eventType} event and linked to ${person.gramps_id}`)
+  }
+}
+
 async function executeUpdateGramps(payload: {
-  gramps_id: string
-  changes: Record<string, any>
+  action_id?: string
+  action_type?: string
+  description?: string
+  target?: { type: string; id: string; name: string }
+  changes?: Record<string, any>
   source_fact?: string
   document_id: string
+  linked_person?: { gramps_id: string; name: string } | null
 }): Promise<{ success: boolean; error?: string; gramps_id?: string }> {
   try {
-    const { gramps_id, changes } = payload
+    // Resolve gramps_id from either target or linked_person
+    const gramps_id = payload.target?.id || payload.linked_person?.gramps_id
+    if (!gramps_id) {
+      return { success: false, error: 'No gramps_id provided (neither target.id nor linked_person.gramps_id)' }
+    }
 
-    // Fetch current person to merge changes
+    const changes = payload.changes || {}
+
+    // Fetch current person to get their handle (Gramps API needs handle, not gramps_id for PUT)
     const current = await getPerson(gramps_id)
 
-    // Build update payload — merge with existing data
-    const updated = { ...current, ...changes }
+    // Build structured update — convert AI-friendly fields to Gramps API format
+    const updateData: Record<string, any> = {}
 
-    await updatePerson(gramps_id, updated)
+    // Handle birth_date → create or update Birth event
+    if (changes.birth_date) {
+      // Gramps stores dates on events, not directly on the person
+      // We need to find or create a Birth event and link it
+      await upsertPersonEvent(current, 'Birth', changes.birth_date, payload.document_id)
+    }
 
-    // Also add citation if document_id provided
+    // Handle death_date → create or update Death event
+    if (changes.death_date) {
+      await upsertPersonEvent(current, 'Death', changes.death_date, payload.document_id)
+    }
+
+    // Handle name changes
+    if (changes.first_name || changes.surname) {
+      const primaryName = { ...current.primary_name }
+      if (changes.first_name) primaryName.first_name = changes.first_name
+      if (changes.surname) {
+        primaryName.surname_list = [{ surname: changes.surname }]
+      }
+      updateData.primary_name = primaryName
+    }
+
+    // Handle gender
+    if (changes.gender) {
+      const genderMap: Record<string, number> = { male: 1, female: 2, unknown: 0 }
+      updateData.gender = genderMap[changes.gender.toLowerCase()] ?? (current as any).gender
+    }
+
+    // Only update person record if we have direct field changes
+    if (Object.keys(updateData).length > 0) {
+      await updatePerson(gramps_id, { ...current, ...updateData })
+    }
+
+    // Add citation
     if (payload.document_id) {
       try {
         await supabaseService.from('citations').insert({
           document_id: payload.document_id,
           person_id: gramps_id,
-          fact: payload.source_fact || 'Document analysis',
+          fact: payload.source_fact || payload.description || 'Document analysis',
           confidence: 'probable',
         })
       } catch (citeErr) {
@@ -48,6 +186,7 @@ async function executeUpdateGramps(payload: {
 
     return { success: true, gramps_id }
   } catch (error: any) {
+    console.error('[ExecuteAction] update_gramps error:', error)
     return { success: false, error: error.message }
   }
 }
