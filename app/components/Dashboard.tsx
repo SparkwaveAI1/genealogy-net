@@ -45,10 +45,6 @@ export default function Dashboard() {
   const [selectedModel, setSelectedModel] = useState('gpt-4o-mini')
   const [modelMenuOpen, setModelMenuOpen] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
-  const chatFileInputRef = useRef<HTMLInputElement>(null)
-
-  // Chat attachment state
-  const [chatAttachment, setChatAttachment] = useState<File | null>(null)
 
   // Parse ---ACTIONS--- blocks from AI message content
   function parseActions(content: string): { cleanContent: string; actions: ActionButton[] } {
@@ -203,9 +199,9 @@ export default function Dashboard() {
 
   const sendMessage = async (e: React.FormEvent) => {
     e.preventDefault()
-    if ((!input.trim() && !chatAttachment) || isLoading) return
+    if (!input.trim() || isLoading) return
 
-    const userMessage = input.trim() || (chatAttachment ? `[Attached file: ${chatAttachment.name}]` : '')
+    const userMessage = input.trim()
     setInput('')
     setIsLoading(true)
 
@@ -215,35 +211,16 @@ export default function Dashboard() {
 
     try {
       const allMessages = [...messages, newUserMsg]
-
-      if (chatAttachment) {
-        // Send with file attachment via FormData
-        const fd = new FormData()
-        fd.append('file', chatAttachment)
-        fd.append('messages', JSON.stringify(allMessages))
-        fd.append('model', selectedModel)
-
-        const response = await fetch('/api/chat', { method: 'POST', body: fd })
-        const data = await response.json()
-        if (data.message) {
-          setMessages(prev => [...prev, { role: 'assistant', content: data.message, provider: data.provider }])
-        } else if (data.error) {
-          setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${data.error}` }])
-        }
-        setChatAttachment(null)
-      } else {
-        // Normal JSON chat
-        const response = await fetch('/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ messages: allMessages, model: selectedModel }),
-        })
-        const data = await response.json()
-        if (data.message) {
-          setMessages(prev => [...prev, { role: 'assistant', content: data.message, provider: data.provider }])
-        } else if (data.error) {
-          setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${data.error}` }])
-        }
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: allMessages, model: selectedModel }),
+      })
+      const data = await response.json()
+      if (data.message) {
+        setMessages(prev => [...prev, { role: 'assistant', content: data.message, provider: data.provider }])
+      } else if (data.error) {
+        setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${data.error}` }])
       }
     } catch (error) {
       console.error('Error sending message:', error)
@@ -254,17 +231,6 @@ export default function Dashboard() {
     } finally {
       setIsLoading(false)
     }
-  }
-
-  const handleChatFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      setChatAttachment(e.target.files[0])
-    }
-  }
-
-  const handleChatFileClear = () => {
-    setChatAttachment(null)
-    if (chatFileInputRef.current) chatFileInputRef.current.value = ''
   }
 
   return (
@@ -366,52 +332,16 @@ export default function Dashboard() {
         {/* Input */}
         <div className="p-4 border-t border-[#D3D1C7] bg-white">
           <form onSubmit={sendMessage}>
-            {/* Attachment preview */}
-            {chatAttachment && (
-              <div className="mb-2 flex items-center gap-2">
-                {chatAttachment.type.startsWith('image/') ? (
-                  <img
-                    src={URL.createObjectURL(chatAttachment)}
-                    alt={chatAttachment.name}
-                    className="w-12 h-12 object-cover rounded border border-[#D3D1C7]"
-                  />
-                ) : (
-                  <div className="w-12 h-12 flex items-center justify-center bg-[#F5F2ED] rounded border border-[#D3D1C7] text-[10px] text-gray-500 text-center px-1">
-                    {chatAttachment.name.slice(0, 12)}
-                  </div>
-                )}
-                <div className="flex-1 text-[11px] text-gray-600 truncate">{chatAttachment.name}</div>
-                <button
-                  type="button"
-                  onClick={handleChatFileClear}
-                  className="text-gray-400 hover:text-red-500 text-sm"
-                >
-                  ✕
-                </button>
-              </div>
-            )}
+            {/* Attachment preview — removed (document upload now goes to /documents) */}
+
             <div className="flex gap-2">
-              {/* Hidden file input with label wrapper */}
-              <label
-                className="flex-shrink-0 px-3 py-2 border border-[#D3D1C7] rounded-lg hover:bg-[#F5F2ED] text-gray-500 text-[13px] cursor-pointer"
-                title="Attach file"
-              >
-                📎
-                <input
-                  ref={chatFileInputRef}
-                  type="file"
-                  accept="image/*,application/pdf,text/*,.txt,.md,.csv"
-                  onChange={handleChatFileSelect}
-                  className="hidden"
-                />
-              </label>
               <textarea
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
-                    if (input.trim() || chatAttachment) sendMessage(e as any);
+                    if (input.trim()) sendMessage(e as any);
                   }
                 }}
                 placeholder="Ask Hermes anything... (Enter to send, Shift+Enter for new line)"
@@ -421,7 +351,7 @@ export default function Dashboard() {
               />
               <button
                 type="submit"
-                disabled={isLoading || (!input.trim() && !chatAttachment)}
+                disabled={isLoading || !input.trim()}
                 className="flex-shrink-0 px-4 py-2 bg-[#EF9F27] text-white rounded-lg hover:bg-[#D88E1F] disabled:opacity-50 text-[13px] font-medium"
               >
                 {isLoading ? '...' : '→'}

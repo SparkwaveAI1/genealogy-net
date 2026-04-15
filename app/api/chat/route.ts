@@ -192,37 +192,48 @@ async function extractText(buffer: Buffer, ext: string, mimeType: string, fileNa
 // Look up recent documents from Supabase and include content in context
 // ──────────────────────────────────────────────────────────────────────────
 
-async function attachRecentDocuments(messages: any[], supabase: typeof supabaseService): Promise<any[]> {
-  // Find the last user message content
+async function attachRecentDocuments(
+  messages: any[],
+  supabase: typeof supabaseService,
+  explicitDocId?: string | null
+): Promise<any[]> {
   const lastUserMsg = [...messages].reverse().find((m: any) => m.role === 'user');
   if (!lastUserMsg) return messages;
 
-  const userText = (lastUserMsg.content || '').toLowerCase();
+  let targetDoc: { id: string; title: string; file_path: string; date: string; document_type: string } | null = null;
 
-  // Check if user is asking about a document (keywords)
-  const docKeywords = ['document', 'file', 'upload', 'paper', 'record', 'that', 'this', 'it'];
-  const isAskingAboutDoc = docKeywords.some(k => userText.includes(k));
-
-  if (!isAskingAboutDoc) return messages;
-
-  // Fetch recent documents
-  const { data: recentDocs, error } = await supabase
-    .from('documents')
-    .select('id, title, file_path, document_type, date')
-    .order('created_at', { ascending: false })
-    .limit(5);
-
-  if (error || !recentDocs || recentDocs.length === 0) return messages;
-
-  // Try to find the most relevant document
-  let targetDoc = recentDocs[0]; // default to most recent
-
-  // Try to match by filename in user message
-  for (const doc of recentDocs) {
-    const docName = doc.title.toLowerCase().replace(/[^a-z0-9]/g, '');
-    if (userText.includes(docName.substring(0, 10))) {
+  // If explicit document ID provided, fetch that directly
+  if (explicitDocId) {
+    const { data: doc, error } = await supabase
+      .from('documents')
+      .select('id, title, file_path, date, document_type')
+      .eq('id', explicitDocId)
+      .single();
+    if (!error && doc) {
       targetDoc = doc;
-      break;
+    }
+  } else {
+    // Keyword-based auto-detection for paperclip mode
+    const userText = (lastUserMsg.content || '').toLowerCase();
+    const docKeywords = ['document', 'file', 'upload', 'paper', 'record', 'that', 'this', 'it'];
+    const isAskingAboutDoc = docKeywords.some(k => userText.includes(k));
+    if (!isAskingAboutDoc) return messages;
+
+    const { data: recentDocs, error } = await supabase
+      .from('documents')
+      .select('id, title, file_path, document_type, date')
+      .order('created_at', { ascending: false })
+      .limit(5);
+
+    if (error || !recentDocs || recentDocs.length === 0) return messages;
+    targetDoc = recentDocs[0];
+
+    for (const doc of recentDocs) {
+      const docName = doc.title.toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (userText.includes(docName.substring(0, 10))) {
+        targetDoc = doc;
+        break;
+      }
     }
   }
 
@@ -257,7 +268,6 @@ ${content}
 --- END DOCUMENT CONTEXT ---`,
   };
 
-  // Replace the message in the array
   const result = [...messages];
   const msgIndex = result.findIndex((m, i) => i === messages.length - 1 && m.role === 'user');
   if (msgIndex !== -1) {
@@ -323,7 +333,7 @@ async function handleFileChat(req: NextRequest) {
     };
   }
 
-  const result = await handleJsonChat({ messages, model, deep, mode });
+  const result = await handleJsonChat({ messages, model, deep, mode, document_id: savedDocId });
   return result;
 }
 
@@ -332,14 +342,14 @@ async function handleFileChat(req: NextRequest) {
 // ──────────────────────────────────────────────────────────────────────────
 
 async function handleJsonChat(body: any) {
-  const { messages, deep, mode, mystery_context, location_context, model } = body;
+  const { messages, deep, mode, mystery_context, location_context, model, document_id } = body;
 
   if (!messages || !Array.isArray(messages)) {
     return NextResponse.json({ error: 'Messages array is required' }, { status: 400 });
   }
 
   // Look up relevant documents from Supabase and attach content
-  const messagesWithDocs = await attachRecentDocuments(messages, supabaseService);
+  const messagesWithDocs = await attachRecentDocuments(messages, supabaseService, document_id);
 
   let systemPrompt = GENEALOGY_SYSTEM_PROMPT;
 
