@@ -1,8 +1,8 @@
 import { GrampsPerson, GrampsEvent, GrampsFamily } from './types'
 
-const GRAMPS_API_URL = process.env.GRAMPS_API_URL || 'http://178.156.250.119/api'
+const GRAMPS_API_URL = process.env.GRAMPS_API_URL || 'http://178.156.250.119:5000/api'
 const GRAMPS_USERNAME = process.env.GRAMPS_USERNAME || 'scott'
-const GRAMPS_PASSWORD = process.env.GRAMPS_PASSWORD || 'YourPassword123'
+const GRAMPS_PASSWORD = process.env.GRAMPS_PASSWORD || 'claw1234'
 
 let cachedToken: string | null = null
 let tokenExpiry: number = 0
@@ -75,15 +75,32 @@ async function grampsRequest<T>(endpoint: string, options?: RequestInit): Promis
 }
 
 /**
- * Get all people or search by name
+ * Transform a /search/ result to GrampsPerson shape.
+ * The /search/ endpoint returns { handle, object: { ...full person... } }
+ */
+function transformSearchResult(r: any): GrampsPerson {
+  return {
+    handle: r.handle,
+    gramps_id: r.object?.gramps_id,
+    primary_name: r.object?.primary_name,
+    event_ref_list: r.object?.event_ref_list,
+  } as GrampsPerson
+}
+
+/**
+ * Get all people or search by name.
+ * Uses /search/?query= for searches (q= param is invalid on /people/).
+ * Uses /people/?keys= for non-search (returns all people).
  */
 export async function getPeople(search?: string): Promise<GrampsPerson[]> {
-  // Use keys parameter to only fetch needed fields for better performance
+  if (search) {
+    // /search/ returns {handle, object:{...}} — transform to GrampsPerson[]
+    const results = await grampsRequest<any[]>(`/search/?query=${encodeURIComponent(search)}`)
+    return results.map(transformSearchResult)
+  }
+  // /people/ returns plain GrampsPerson[]
   const keys = 'handle,gramps_id,primary_name'
-  const endpoint = search
-    ? `/people/?q=${encodeURIComponent(search)}&keys=${keys}`
-    : `/people/?keys=${keys}`
-  return grampsRequest<GrampsPerson[]>(endpoint)
+  return grampsRequest<GrampsPerson[]>(`/people/?keys=${keys}`)
 }
 
 /**
@@ -91,12 +108,17 @@ export async function getPeople(search?: string): Promise<GrampsPerson[]> {
  * Fetches people + their events in parallel, then extracts dates synchronously.
  */
 export async function getPeopleWithDates(search?: string, limit = 8): Promise<Array<GrampsPerson & { birth_year: number | null; death_year: number | null }>> {
-  // Fetch people with event_ref_list included
-  const keys = 'handle,gramps_id,primary_name,event_ref_list'
-  const endpoint = search
-    ? `/people/?q=${encodeURIComponent(search)}&keys=${keys}`
-    : `/people/?keys=${keys}`
-  const people: GrampsPerson[] = await grampsRequest(endpoint)
+  let people: GrampsPerson[]
+
+  if (search) {
+    // /search/ returns {handle, object:{...}} — transform to GrampsPerson[]
+    const results = await grampsRequest<any[]>(`/search/?query=${encodeURIComponent(search)}`)
+    people = results.map(transformSearchResult)
+  } else {
+    // /people/ returns plain GrampsPerson[]
+    const keys = 'handle,gramps_id,primary_name,event_ref_list'
+    people = await grampsRequest<GrampsPerson[]>(`/people/?keys=${keys}`)
+  }
 
   const limited = people.slice(0, limit)
 

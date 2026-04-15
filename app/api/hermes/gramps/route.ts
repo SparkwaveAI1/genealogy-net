@@ -14,7 +14,7 @@ import { supabaseService } from '@/lib/supabase-service'
  *   - keys: comma-separated list of fields to return
  *   - q: search query (for search endpoints)
  */
-const GRAMPS_BASE = process.env.GRAMPS_API_URL || 'http://178.156.250.119/api'
+const GRAMPS_BASE = process.env.GRAMPS_API_URL || 'http://178.156.250.119:5000/api'
 const GRAMPS_USER = process.env.GRAMPS_USERNAME || 'scott'
 const GRAMPS_PASS = process.env.GRAMPS_PASSWORD || 'claw1234'
 
