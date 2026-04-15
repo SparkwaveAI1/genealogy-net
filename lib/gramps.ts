@@ -87,6 +87,64 @@ export async function getPeople(search?: string): Promise<GrampsPerson[]> {
 }
 
 /**
+ * Get people with birth/death years included — for disambiguation in search UIs.
+ * Fetches people + their events in parallel, then extracts dates synchronously.
+ */
+export async function getPeopleWithDates(search?: string, limit = 8): Promise<Array<GrampsPerson & { birth_year: number | null; death_year: number | null }>> {
+  // Fetch people with event_ref_list included
+  const keys = 'handle,gramps_id,primary_name,event_ref_list'
+  const endpoint = search
+    ? `/people/?q=${encodeURIComponent(search)}&keys=${keys}`
+    : `/people/?keys=${keys}`
+  const people: GrampsPerson[] = await grampsRequest(endpoint)
+
+  const limited = people.slice(0, limit)
+
+  // Collect all unique event refs
+  const eventRefs = new Set<string>()
+  for (const p of limited) {
+    if (p.event_ref_list) {
+      for (const er of p.event_ref_list) {
+        if (er.ref) eventRefs.add(er.ref)
+      }
+    }
+  }
+
+  // Batch-fetch all events in parallel
+  const eventResults = await Promise.all(
+    Array.from(eventRefs).map(ref => getEvent(ref).catch(() => null))
+  )
+
+  // Build handle → event map
+  const eventMap: Record<string, GrampsEvent> = {}
+  for (const evt of eventResults) {
+    if (evt) eventMap[evt.handle] = evt
+  }
+
+  // Extract birth/death years from cached events
+  return limited.map(p => {
+    let birthYear: number | null = null
+    let deathYear: number | null = null
+
+    if (p.event_ref_list) {
+      for (const er of p.event_ref_list) {
+        const evt = eventMap[er.ref]
+        if (!evt) continue
+        const type = evt.type?.string?.toLowerCase() || ''
+        if (type.includes('birth') && !birthYear && evt.date?.dateval) {
+          birthYear = Array.isArray(evt.date.dateval) ? evt.date.dateval[2] : null
+        }
+        if (type.includes('death') && !deathYear && evt.date?.dateval) {
+          deathYear = Array.isArray(evt.date.dateval) ? evt.date.dateval[2] : null
+        }
+      }
+    }
+
+    return { ...p, birth_year: birthYear, death_year: deathYear }
+  })
+}
+
+/**
  * Get single person by Gramps ID
  * Uses query parameter ?gramps_id={id} because /people/{id}/ endpoint returns 404
  */

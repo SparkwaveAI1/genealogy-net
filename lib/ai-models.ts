@@ -9,6 +9,9 @@ export interface AIMessage {
   /** Base64-encoded image to include with this message (all vision-capable models) */
   imageBase64?: string;
   imageMimeType?: string;
+  /** Base64-encoded document (PDF) to include with this message (GPT-4o only) */
+  documentBase64?: string;
+  documentMimeType?: string;
 }
 
 export interface AIProvider {
@@ -57,9 +60,25 @@ export class OpenAIProvider implements AIProvider {
     const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
     const hasImage = lastUserMsg?.imageBase64 && lastUserMsg?.imageMimeType;
 
-    // Format messages, converting image attachment to content array format
+    // Format messages, converting image or document attachment to content array format
     const formatMessage = (msg: AIMessage) => {
-      if (msg.role === 'user' && msg.imageBase64 && msg.imageMimeType) {
+      const hasDocument = msg.role === 'user' && msg.documentBase64 && msg.documentMimeType;
+      const hasImage = msg.role === 'user' && msg.imageBase64 && msg.imageMimeType;
+
+      if (hasDocument) {
+        const content: any[] = [];
+        if (msg.content.trim()) content.push({ type: 'text', text: msg.content });
+        content.push({
+          type: 'document',
+          document: {
+            base64: msg.documentBase64,
+            mime_type: msg.documentMimeType,
+          },
+        });
+        return { role: msg.role, content };
+      }
+
+      if (hasImage) {
         const content: any[] = [];
         if (msg.content.trim()) content.push({ type: 'text', text: msg.content });
         content.push({

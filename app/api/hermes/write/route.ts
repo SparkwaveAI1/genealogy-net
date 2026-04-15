@@ -3,15 +3,16 @@ import { supabaseService } from '@/lib/supabase-service'
 
 /**
  * POST /api/hermes/write
- * 
+ *
  * Write GRIP data to Supabase using service role client.
  * Supports writing to: people, mysteries, evidence, documents tables.
- * 
+ *
  * Body:
  *   - table: 'people' | 'mysteries' | 'evidence' | 'documents' (required)
  *   - action: 'insert' | 'update' | 'upsert' | 'delete' (required)
  *   - data: record(s) to write (required for insert/update/upsert)
  *   - id: record ID for update/delete (required for update/delete)
+ *   - gramps_id: Gramps person ID to resolve to GRIP UUID for people table
  */
 export async function POST(req: NextRequest) {
   try {

@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import { Person } from '@/lib/types'
+import DocumentUploader from '@/app/components/DocumentUploader'
 
 interface Mystery {
   id: string
@@ -78,6 +79,7 @@ export default function MysteryWorkspace() {
   const [inputMessage, setInputMessage] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [showAddEvidence, setShowAddEvidence] = useState(false)
+  const [showUpload, setShowUpload] = useState(false)
   const [newEvidence, setNewEvidence] = useState({
     content: '',
     source: '',
@@ -393,6 +395,14 @@ export default function MysteryWorkspace() {
 
           <div className="border-t border-[#D3D1C7] bg-[#FDFCFA] p-4">
             <form onSubmit={handleSendMessage} className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setShowUpload(!showUpload)}
+                className="flex-shrink-0 px-3 py-2 border border-[#D3D1C7] rounded hover:bg-[#F5F2ED] text-gray-500 text-[13px]"
+                title="Upload document"
+              >
+                📎
+              </button>
               <input
                 type="text"
                 value={inputMessage}
@@ -409,6 +419,24 @@ export default function MysteryWorkspace() {
                 {isLoading ? 'Thinking...' : 'Send'}
               </button>
             </form>
+            {showUpload && (
+              <div className="mt-3 pt-3 border-t border-[#D3D1C7]">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[11px] font-medium text-gray-700">Upload Document</span>
+                  <button
+                    onClick={() => setShowUpload(false)}
+                    className="text-[11px] text-gray-500 hover:text-gray-700"
+                  >
+                    ✕
+                  </button>
+                </div>
+                <DocumentUploader
+                  contextType="mystery"
+                  contextId={mystery?.id}
+                  contextName={mystery?.title}
+                />
+              </div>
+            )}
           </div>
         </div>
 

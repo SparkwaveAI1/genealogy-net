@@ -2,11 +2,19 @@
 
 import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
+import DocumentUploader from './DocumentUploader'
 
 interface Message {
   role: 'user' | 'assistant'
   content: string
   provider?: string
+  actions?: ActionButton[]
+}
+
+interface ActionButton {
+  label: string
+  action: string
+  params: Record<string, string>
 }
 
 const MODEL_OPTIONS = [
@@ -28,26 +36,6 @@ interface Person {
   confidence?: string
 }
 
-interface AnalysisResult {
-  individuals_found: Array<{ name: string; dates?: string; places?: string; role?: string }>
-  key_facts: string[]
-  confidence_assessment: string
-  flags: string[]
-  suggested_mystery_link: string
-  follow_up_records: string[]
-}
-
-interface PeopleMatch {
-  extracted_name: string
-  extracted_dates: string | null
-  extracted_places: string | null
-  candidates: Array<{
-    gramps_id: string
-    name: string
-    handle: string
-  }>
-}
-
 export default function Dashboard() {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
@@ -63,19 +51,70 @@ export default function Dashboard() {
   // Chat attachment state
   const [chatAttachment, setChatAttachment] = useState<File | null>(null)
 
-  // Document upload state
-  const [selectedFile, setSelectedFile] = useState<File | null>(null)
-  const [uploadProgress, setUploadProgress] = useState(false)
-  const [uploadResult, setUploadResult] = useState<AnalysisResult | null>(null)
-  const [uploadError, setUploadError] = useState<string | null>(null)
-  const [individualContext, setIndividualContext] = useState('')
-  const [documentType, setDocumentType] = useState('')
-  const [processingInstructions, setProcessingInstructions] = useState('')
-  const [selectedMysteryId, setSelectedMysteryId] = useState('')
-  const [peopleMatches, setPeopleMatches] = useState<PeopleMatch[]>([])
-  const [selectedPeople, setSelectedPeople] = useState<Set<string>>(new Set())
-  const [documentId, setDocumentId] = useState<string | null>(null)
-  const fileInputRef = useRef<HTMLInputElement>(null)
+  // Parse ---ACTIONS--- blocks from AI message content
+  function parseActions(content: string): { cleanContent: string; actions: ActionButton[] } {
+    const actions: ActionButton[] = []
+    const match = content.match(/---ACTIONS---\n([\s\S]*?)$/)
+    if (!match) return { cleanContent: content, actions }
+
+    const cleanContent = content.substring(0, match.index!).trim()
+    const actionLines = match[1].split('\n').filter(l => l.match(/^\d+\./))
+
+    for (const line of actionLines) {
+      const labelMatch = line.match(/\[([^\]]+)\]/)
+      const paramsMatch = line.match(/→\s*(\w+)\|(.+)/)
+      if (!labelMatch || !paramsMatch) continue
+
+      const label = labelMatch[1].trim()
+      const action = paramsMatch[1].trim()
+      const params: Record<string, string> = {}
+      for (const pair of paramsMatch[2].split('|')) {
+        const [k, v] = pair.split('=').map(s => s.trim())
+        if (k && v) params[k] = v
+      }
+      actions.push({ label, action, params })
+    }
+    return { cleanContent, actions }
+  }
+
+  // Execute an action button click
+  async function executeAction(action: ActionButton, originalMessage: string) {
+    const { action: actionType, params } = action
+
+    if (actionType === 'add_evidence') {
+      const payload = {
+        table: 'evidence',
+        action: 'insert',
+        data: {
+          content: `[${params.person_id}] ${params.description}`,
+          evidence_type: params.evidence_type || 'primary',
+          source: params.source || 'Chat attachment',
+          confidence: params.confidence || 'medium',
+          flag: params.flag || null,
+          created_at: new Date().toISOString(),
+        },
+      }
+      try {
+        const res = await fetch('/api/hermes/write', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        })
+        const result = await res.json()
+        if (result.success) {
+          alert(`Evidence saved!\n\nPerson: ${params.person_id}\n${params.description}\n\nSource: ${params.source || 'Chat attachment'}`)
+        } else {
+          alert(`Failed: ${result.error}`)
+        }
+      } catch (err: any) {
+        alert(`Error: ${err.message}`)
+      }
+    } else if (actionType === 'create_person') {
+      alert(`Create person:\n${params.given_name} ${params.surname}\nBirth: ${params.birth_year}\nNotes: ${params.notes}\n\nOpen Gramps Web to create this person, then return here to link it.`)
+    } else {
+      alert(`Action "${actionType}" not yet implemented.`)
+    }
+  }
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -229,130 +268,6 @@ export default function Dashboard() {
     if (chatFileInputRef.current) chatFileInputRef.current.value = ''
   }
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      console.log('File selected:', e.target.files[0].name)
-      setSelectedFile(e.target.files[0])
-      setUploadResult(null)
-      setUploadError(null)
-    }
-  }
-
-  const handleUpload = async () => {
-    console.log('handleUpload called, selectedFile:', selectedFile?.name)
-
-    if (!selectedFile) {
-      console.log('No file selected, returning')
-      setUploadError('Please select a file first')
-      return
-    }
-
-    console.log('Starting upload...')
-    setUploadProgress(true)
-    setUploadResult(null)
-    setUploadError(null)
-
-    try {
-      const formData = new FormData()
-      formData.append('file', selectedFile)
-      formData.append('individual_context', individualContext)
-      formData.append('document_type', documentType)
-      formData.append('processing_instructions', processingInstructions)
-      if (selectedMysteryId) {
-        formData.append('mystery_id', selectedMysteryId)
-      }
-
-      console.log('Sending fetch request to /api/documents')
-      const response = await fetch('/api/documents', {
-        method: 'POST',
-        body: formData,
-      })
-
-      console.log('Response status:', response.status)
-      const data = await response.json()
-      console.log('Response data:', data)
-
-      if (!response.ok) {
-        setUploadError(data.error || `Upload failed with status ${response.status}`)
-        return
-      }
-
-      if (data.success && data.analysis) {
-        console.log('Analysis received successfully')
-        setUploadResult(data.analysis)
-        setPeopleMatches(data.people_matches || [])
-        setDocumentId(data.document_id || null)
-        setSelectedPeople(new Set()) // Reset selected people
-      } else {
-        setUploadError(data.error || 'Unknown error occurred')
-        console.error('Upload error:', data)
-      }
-    } catch (error) {
-      console.error('Error uploading document:', error)
-      setUploadError(error instanceof Error ? error.message : 'Network error occurred')
-    } finally {
-      console.log('Upload process completed')
-      setUploadProgress(false)
-    }
-  }
-
-  const handleAddToWiki = async () => {
-    if (!uploadResult) return
-
-    try {
-      const content = `## Document Analysis\n\n${uploadResult.key_facts.join('\n')}\n\nConfidence: ${uploadResult.confidence_assessment}`
-
-      await fetch('/api/wiki-sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          page: 'document-analysis.md',
-          content,
-        }),
-      })
-
-      alert('Added to wiki!')
-    } catch (error) {
-      console.error('Error adding to wiki:', error)
-    }
-  }
-
-  const togglePersonSelection = (grampsId: string) => {
-    const newSelected = new Set(selectedPeople)
-    if (newSelected.has(grampsId)) {
-      newSelected.delete(grampsId)
-    } else {
-      newSelected.add(grampsId)
-    }
-    setSelectedPeople(newSelected)
-  }
-
-  const handleSavePeopleLinks = async () => {
-    if (!documentId || selectedPeople.size === 0) return
-
-    try {
-      // Create document_people records in Supabase
-      const response = await fetch('/api/documents/people', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          document_id: documentId,
-          gramps_ids: Array.from(selectedPeople),
-        }),
-      })
-
-      if (response.ok) {
-        alert(`Linked ${selectedPeople.size} people to this document!`)
-      } else {
-        const error = await response.json()
-        alert(`Error saving links: ${error.message}`)
-      }
-    } catch (error) {
-      console.error('Error saving people links:', error)
-      alert('Error saving people links')
-    }
-  }
-
   return (
     <div className="flex h-screen">
       {/* Agent Panel (Center) */}
@@ -406,22 +321,39 @@ export default function Dashboard() {
               <p>Loading briefing...</p>
             </div>
           )}
-          {messages.map((msg, idx) => (
-            <div key={idx} className={`mb-4 ${msg.role === 'user' ? 'text-right' : ''}`}>
-              <div className={`inline-block max-w-[80%] ${
-                msg.role === 'user'
-                  ? 'bg-[#EF9F27] text-white'
-                  : 'bg-white border border-[#D3D1C7]'
-              } rounded-lg px-4 py-3 text-[13px]`}>
-                {msg.content}
-                {msg.role === 'assistant' && msg.provider && (
-                  <div className="text-[9px] text-gray-400 mt-1 pt-1 border-t border-[#E5E5E5]">
-                    via {msg.provider}
-                  </div>
-                )}
+          {messages.map((msg, idx) => {
+            const { cleanContent, actions } = msg.actions ? { cleanContent: msg.content, actions: msg.actions } : parseActions(msg.content)
+            return (
+              <div key={idx} className={`mb-4 ${msg.role === 'user' ? 'text-right' : ''}`}>
+                <div className={`inline-block max-w-[80%] ${
+                  msg.role === 'user'
+                    ? 'bg-[#EF9F27] text-white'
+                    : 'bg-white border border-[#D3D1C7]'
+                } rounded-lg px-4 py-3 text-[13px]`}>
+                  <div className="whitespace-pre-wrap">{cleanContent}</div>
+                  {msg.role === 'assistant' && msg.provider && (
+                    <div className="text-[9px] text-gray-400 mt-1 pt-1 border-t border-[#E5E5E5]">
+                      via {msg.provider}
+                    </div>
+                  )}
+                  {actions.length > 0 && (
+                    <div className="mt-3 pt-2 border-t border-[#E5E5E5] space-y-1.5">
+                      <div className="text-[10px] font-semibold text-gray-500 uppercase tracking-wide mb-1">Actions</div>
+                      {actions.map((action, ai) => (
+                        <button
+                          key={ai}
+                          onClick={() => executeAction(action, msg.content)}
+                          className="block w-full text-left px-2 py-1.5 bg-[#F5F2ED] hover:bg-[#EDE9E0] border border-[#D3D1C7] rounded text-[12px] text-gray-700 transition-colors"
+                        >
+                          {action.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            )
+          })}
           {isLoading && (
             <div className="mb-4">
               <div className="inline-block bg-white border border-[#D3D1C7] rounded-lg px-4 py-3 text-[13px] text-gray-400">
@@ -474,12 +406,18 @@ export default function Dashboard() {
                   className="hidden"
                 />
               </label>
-              <input
-                type="text"
+              <textarea
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder="Ask Hermes anything..."
-                className="flex-1 px-4 py-2 border border-[#D3D1C7] rounded-lg focus:outline-none focus:border-[#EF9F27] text-[13px]"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    if (input.trim() || chatAttachment) sendMessage(e as any);
+                  }
+                }}
+                placeholder="Ask Hermes anything... (Enter to send, Shift+Enter for new line)"
+                rows={3}
+                className="flex-1 px-4 py-2 border border-[#D3D1C7] rounded-lg focus:outline-none focus:border-[#EF9F27] text-[13px] resize-none"
                 disabled={isLoading}
               />
               <button
@@ -500,222 +438,7 @@ export default function Dashboard() {
           {/* Document Upload */}
           <div className="bg-[#FDFCFA] border border-[#D3D1C7] rounded-lg p-4">
             <h3 className="text-[13px] font-semibold mb-3">Document Upload</h3>
-
-            <input
-              ref={fileInputRef}
-              type="file"
-              onChange={handleFileSelect}
-              accept=".pdf,.jpg,.jpeg,.png,.gif,.webp,.txt,.md,.doc,.docx"
-              className="hidden"
-            />
-
-            <div
-              onClick={() => fileInputRef.current?.click()}
-              className="border-2 border-dashed border-[#D3D1C7] rounded-lg p-4 text-center mb-3 cursor-pointer hover:border-[#EF9F27] transition-colors"
-            >
-              {selectedFile ? (
-                <div>
-                  <p className="text-[11px] text-gray-900 font-medium">{selectedFile.name}</p>
-                  <p className="text-[10px] text-gray-500 mt-1">
-                    {(selectedFile.size / 1024).toFixed(1)} KB
-                  </p>
-                </div>
-              ) : (
-                <p className="text-[11px] text-gray-500">Drop files here or click</p>
-              )}
-            </div>
-
-            <textarea
-              value={individualContext}
-              onChange={(e) => setIndividualContext(e.target.value)}
-              placeholder="Who does this relate to?"
-              className="w-full px-2 py-1.5 border border-[#D3D1C7] rounded text-[11px] mb-2 focus:outline-none focus:border-[#EF9F27]"
-              rows={3}
-            />
-
-            <select
-              value={documentType}
-              onChange={(e) => setDocumentType(e.target.value)}
-              className="w-full px-2 py-1.5 border border-[#D3D1C7] rounded text-[11px] mb-2 focus:outline-none focus:border-[#EF9F27]"
-            >
-              <option value="">Document type</option>
-              <option value="census">Census</option>
-              <option value="certificate">Birth Certificate</option>
-              <option value="certificate">Death Certificate</option>
-              <option value="certificate">Marriage Record</option>
-              <option value="will">Will</option>
-              <option value="deed">Deed</option>
-              <option value="letter">Letter</option>
-              <option value="photo">Photo</option>
-              <option value="other">Other</option>
-            </select>
-
-            <textarea
-              value={processingInstructions}
-              onChange={(e) => setProcessingInstructions(e.target.value)}
-              placeholder="Processing instructions"
-              className="w-full px-2 py-1.5 border border-[#D3D1C7] rounded text-[11px] mb-2 focus:outline-none focus:border-[#EF9F27]"
-              rows={3}
-            />
-
-            <select
-              value={selectedMysteryId}
-              onChange={(e) => setSelectedMysteryId(e.target.value)}
-              className="w-full px-2 py-1.5 border border-[#D3D1C7] rounded text-[11px] mb-3 focus:outline-none focus:border-[#EF9F27]"
-            >
-              <option value="">Link to mystery</option>
-              {mysteries.map(m => (
-                <option key={m.id} value={m.id}>{m.title}</option>
-              ))}
-            </select>
-
-            <button
-              onClick={(e) => {
-                console.log('Button clicked!', { selectedFile: selectedFile?.name, uploadProgress })
-                handleUpload()
-              }}
-              disabled={!selectedFile || uploadProgress}
-              className="w-full bg-[#EF9F27] text-white py-2 rounded text-[11px] font-medium hover:bg-[#d88d1f] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              {uploadProgress ? 'Analyzing...' : 'Analyze with Hermes'}
-            </button>
-
-            {/* Debug Info */}
-            {selectedFile && (
-              <div className="mt-2 text-[10px] text-gray-500">
-                Ready to upload: {selectedFile.name} ({(selectedFile.size / 1024).toFixed(1)} KB)
-              </div>
-            )}
-
-            {/* Error Display */}
-            {uploadError && (
-              <div className="mt-3 p-3 bg-[#FCEBEB] border border-[#791F1F] rounded">
-                <div className="text-[11px] text-[#791F1F] font-medium mb-1">Upload Error</div>
-                <div className="text-[11px] text-[#791F1F]">{uploadError}</div>
-              </div>
-            )}
-
-            {/* Analysis Results */}
-            {uploadResult && (
-              <div className="mt-4 pt-4 border-t border-[#D3D1C7]">
-                <h4 className="text-[11px] font-semibold mb-2">Analysis Results</h4>
-
-                {uploadResult.individuals_found.length > 0 && (
-                  <div className="mb-3">
-                    <div className="text-[10px] text-gray-500 uppercase mb-1">Individuals Found</div>
-                    <div className="space-y-1">
-                      {uploadResult.individuals_found.map((ind, idx) => (
-                        <div key={idx} className="text-[11px] bg-[#F5F2ED] p-2 rounded">
-                          <div className="font-medium">{ind.name}</div>
-                          {ind.dates && <div className="text-gray-600">{ind.dates}</div>}
-                          {ind.places && <div className="text-gray-600">{ind.places}</div>}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {uploadResult.key_facts.length > 0 && (
-                  <div className="mb-3">
-                    <div className="text-[10px] text-gray-500 uppercase mb-1">Key Facts</div>
-                    <ul className="text-[11px] space-y-1">
-                      {uploadResult.key_facts.slice(0, 3).map((fact, idx) => (
-                        <li key={idx} className="text-gray-900">• {fact}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                {uploadResult.flags.length > 0 && (
-                  <div className="mb-3">
-                    <div className="text-[10px] text-gray-500 uppercase mb-1">Flags</div>
-                    <div className="space-y-1">
-                      {uploadResult.flags.map((flag, idx) => (
-                        <div key={idx} className="text-[11px] text-[#791F1F] bg-[#FCEBEB] p-1.5 rounded">
-                          {flag}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* People Matches from Gramps */}
-                {peopleMatches.length > 0 && (
-                  <div className="mb-3">
-                    <div className="text-[10px] text-gray-500 uppercase mb-1">People Identified</div>
-                    <div className="text-[10px] text-gray-600 mb-2">
-                      Select people from your Gramps tree to link to this document
-                    </div>
-                    <div className="space-y-3">
-                      {peopleMatches.map((match, idx) => (
-                        <div key={idx} className="border border-[#D3D1C7] rounded p-2">
-                          <div className="text-[11px] font-medium text-gray-700 mb-1">
-                            Extracted: {match.extracted_name}
-                            {match.extracted_dates && (
-                              <span className="text-gray-500 ml-1">({match.extracted_dates})</span>
-                            )}
-                          </div>
-                          <div className="space-y-1">
-                            {match.candidates.map((candidate) => (
-                              <label
-                                key={candidate.gramps_id}
-                                className="flex items-center gap-2 text-[11px] hover:bg-[#F5F2ED] p-1 rounded cursor-pointer"
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={selectedPeople.has(candidate.gramps_id)}
-                                  onChange={() => togglePersonSelection(candidate.gramps_id)}
-                                  className="w-3 h-3"
-                                />
-                                <div className="flex-1">
-                                  <span className="font-medium">{candidate.name}</span>
-                                  <span className="text-gray-500 ml-1 font-mono text-[10px]">
-                                    {candidate.gramps_id}
-                                  </span>
-                                </div>
-                              </label>
-                            ))}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                    {selectedPeople.size > 0 && (
-                      <button
-                        onClick={handleSavePeopleLinks}
-                        className="w-full mt-2 px-2 py-1.5 bg-[#EF9F27] text-white rounded text-[10px] font-medium hover:bg-[#d88d1f] transition-colors"
-                      >
-                        Link {selectedPeople.size} {selectedPeople.size === 1 ? 'Person' : 'People'} to Document
-                      </button>
-                    )}
-                  </div>
-                )}
-
-                {selectedMysteryId && (
-                  <div className="mb-3 p-2 bg-[#E6F1FB] border border-[#0C447C] rounded">
-                    <div className="text-[10px] text-[#0C447C] font-medium">
-                      Linked to mystery: {mysteries.find(m => m.id === selectedMysteryId)?.title || selectedMysteryId}
-                    </div>
-                  </div>
-                )}
-
-                <div className="flex gap-2 mt-3">
-                  {selectedMysteryId && (
-                    <button
-                      onClick={() => window.location.href = `/mysteries/${selectedMysteryId}`}
-                      className="flex-1 px-2 py-1.5 bg-[#E6F1FB] text-[#0C447C] rounded text-[10px] font-medium hover:bg-[#d5e7f5] transition-colors"
-                    >
-                      View Mystery
-                    </button>
-                  )}
-                  <button
-                    onClick={handleAddToWiki}
-                    className="flex-1 px-2 py-1.5 bg-[#F5F2ED] text-gray-700 rounded text-[10px] font-medium hover:bg-[#e5e2dd] transition-colors"
-                  >
-                    Add to Wiki
-                  </button>
-                </div>
-              </div>
-            )}
+            <DocumentUploader contextType="dashboard" />
           </div>
 
           {/* Active Mysteries */}

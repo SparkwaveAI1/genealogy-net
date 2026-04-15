@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { AIChatRouter } from '@/lib/ai-router';
 import { AIMessage } from '@/lib/ai-models';
-import { spawn } from 'child_process';
 import { createClient } from '@supabase/supabase-js';
 import { writeFile, mkdir, readFile, appendFile } from 'fs/promises';
 import { existsSync } from 'fs';
@@ -31,7 +30,16 @@ When providing genealogical information:
 Format your responses to be clear and well-organized, using confidence indicators like:
 [High confidence] - Verified by primary sources
 [Medium confidence] - Supported by secondary sources or circumstantial evidence
-[Low confidence] - Based on family tradition or requires verification`;
+[Low confidence] - Based on family tradition or requires verification
+
+DOCUMENT PROCESSING: When analyzing uploaded documents (PDFs, images, etc.), after your analysis, ALWAYS propose specific actions the user can take to save this information to their family tree. End your response with a section like:
+
+---ACTIONS---
+1. [Add to Michael Looney profile] → add_evidence|person_id=I402161207379|description=Served in Capt. John Shelby's Virginia militia company, Revolutionary War era.|source=DOCUMENT_NAME|evidence_type=primary|confidence=high
+2. [Add to Benjamin Looney profile] → add_evidence|person_id=I13617490834|description=Benjamin Looney mentioned on page 1 of document, may be son of Robert Looney Jr.|source=DOCUMENT_NAME|evidence_type=secondary|confidence=medium
+3. [Create John Shelby] → create_person|given_name=John|surname=Shelby|birth_year=1723|notes=Married Louisa Looney, dau. of Robert Looney Sr. Captain in Col. Evan Shelby's Virginia Regiment. Died 1794, Washington County, VA.
+
+Use Gramps IDs you know. For create_person, include everything known in the notes field. Keep action labels short (under 50 chars).`;
 
 // Rate limiting: 20 requests per hour
 const RATE_LIMIT = 20;
@@ -178,6 +186,7 @@ intake_method: chat-paperclip
  * Process an upload file for AI consumption.
  * Accepts optional pre-read buffer to avoid re-reading.
  */
+
 async function processUploadFile(file: File, buffer?: Buffer): Promise<{ text?: string; base64?: string; mimeType?: string; error?: string }> {
   const buf = buffer || Buffer.from(await file.arrayBuffer());
   const mimeType = file.type;
@@ -187,30 +196,27 @@ async function processUploadFile(file: File, buffer?: Buffer): Promise<{ text?: 
   }
 
   if (mimeType === 'application/pdf') {
-    return new Promise((resolve) => {
-      const chunks: string[] = [];
-      const child = spawn('/usr/bin/pdftotext', ['-', '-']);
-      child.stdout.on('data', (d) => chunks.push(d.toString()));
-      child.stderr.on('data', (d) => console.error('pdftotext stderr:', d.toString()));
-      child.on('close', (code) => {
-        if (code === 0) {
-          const text = chunks.join('').substring(0, 10000);
-          resolve({ text: `[PDF extracted text]\n${text}` });
-        } else {
-          resolve({ error: `pdftotext exited with code ${code}` });
-        }
-      });
-      child.on('error', (err) => resolve({ error: err.message }));
-      child.stdin.write(buf);
-      child.stdin.end();
-    });
+    // GPT-4o supports PDFs natively as document input - pass as base64
+    return { base64: buf.toString('base64'), mimeType };
   }
 
   if (mimeType.startsWith('text/') || file.name.endsWith('.txt') || file.name.endsWith('.md') || file.name.endsWith('.csv')) {
     return { text: buf.toString('utf-8').substring(0, 10000) };
   }
 
-  return { error: `Unsupported file type: ${mimeType}. Supported: images, PDFs, and text files.` };
+  if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || file.name.endsWith('.docx')) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const mammoth = (await import('mammoth')) as any;
+      const result = await mammoth.extractRawText({ buffer: buf });
+      const text = result.value.substring(0, 10000);
+      return { text: `[DOCX extracted text]\n${text}` };
+    } catch (err: any) {
+      return { error: `DOCX extraction failed: ${err.message}` };
+    }
+  }
+
+  return { error: `Unsupported file type: ${mimeType}. Supported: images, PDFs, DOCX, and text files.` };
 }
 
 async function handleFileChat(req: NextRequest) {
@@ -244,9 +250,15 @@ async function handleFileChat(req: NextRequest) {
   if (processedFile.base64 && processedFile.mimeType) {
     const lastUserMsg = [...messages].reverse().find((m: any) => m.role === 'user');
     if (lastUserMsg) {
-      lastUserMsg.imageBase64 = processedFile.base64;
-      lastUserMsg.imageMimeType = processedFile.mimeType;
-      console.log('[Chat] Attached image base64 to message, length:', processedFile.base64.length);
+      if (processedFile.mimeType === 'application/pdf') {
+        lastUserMsg.documentBase64 = processedFile.base64;
+        lastUserMsg.documentMimeType = processedFile.mimeType;
+        console.log('[Chat] Attached PDF as document, base64 length:', processedFile.base64.length);
+      } else if (processedFile.mimeType.startsWith('image/')) {
+        lastUserMsg.imageBase64 = processedFile.base64;
+        lastUserMsg.imageMimeType = processedFile.mimeType;
+        console.log('[Chat] Attached image base64 to message, length:', processedFile.base64.length);
+      }
     }
   } else if (processedFile.text) {
     const lastUserMsg = [...messages].reverse().find((m: any) => m.role === 'user');

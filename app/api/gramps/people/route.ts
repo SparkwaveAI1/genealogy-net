@@ -1,15 +1,17 @@
-import { NextResponse } from 'next/server'
-import { getPeople } from '@/lib/gramps'
+import { NextRequest, NextResponse } from 'next/server'
+import { getPeople, getPeopleWithDates } from '@/lib/gramps'
 
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url)
-    const search = searchParams.get('search')
+    const query = searchParams.get('query') || searchParams.get('search') || ''
+    const withDates = searchParams.get('dates') === 'true'
+    const limit = parseInt(searchParams.get('limit') || '20', 10)
 
-    const people = await getPeople(search || undefined)
-    console.log('Total people returned:', people.length)
-    console.log('Handles returned:', people.map((p: any) => p.handle))
-    console.log('Raw Gramps people response (first 2):', JSON.stringify(people.slice(0, 2), null, 2))
+    const people = withDates
+      ? await getPeopleWithDates(query || undefined, limit)
+      : await getPeople(query || undefined)
+
     return NextResponse.json(people)
   } catch (error) {
     console.error('Error fetching people from Gramps:', error)

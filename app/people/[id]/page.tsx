@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation'
 import { GrampsPerson } from '@/lib/types'
 import { createServerSupabaseClient } from '@/lib/supabase-server'
 import { getPerson, getPersonParents, getPersonChildren, getPersonSpouses, getPersonSiblings, getPersonBirthYear, getPersonDeathYear } from '@/lib/gramps'
+import PersonDocuments from '@/app/components/PersonDocuments'
 
 function getInitials(person: GrampsPerson): string {
   const first = person.primary_name.first_name?.charAt(0) || ''
@@ -289,6 +290,12 @@ export default async function PersonPage({ params }: PageProps) {
               </div>
             </div>
           </div>
+
+          {/* Documents */}
+          <PersonDocuments
+            personId={person.gramps_id}
+            personName={`${person.primary_name.first_name || ''} ${person.primary_name.surname_list?.[0]?.surname || ''}`.trim()}
+          />
         </div>
       </div>
     </div>
