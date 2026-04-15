@@ -12,21 +12,38 @@ const TEXT_EXTS = new Set(['.txt', '.md', '.csv', '.rt', '.ged', '.gedcom'])
 
 async function extractTextFromBuffer(buffer: Buffer, ext: string): Promise<string> {
   if (IMAGE_EXTS.has(ext)) {
-    return `[IMAGE FILE]`
+    return `[IMAGE FILE — OCR not yet supported]`
   }
 
   if (ext === '.pdf') {
+    const tmpPath = `/tmp/doc-extract-${Date.now()}.pdf`
+    require('fs').writeFileSync(tmpPath, buffer)
+
+    // Try pdftotext with layout (most common)
     try {
-      // Write buffer to temp file for pdftotext
-      const tmpPath = `/tmp/doc-extract-${Date.now()}.pdf`
-      require('fs').writeFileSync(tmpPath, buffer)
       const { stdout } = await execAsync(`pdftotext -layout "${tmpPath}" - 2>/dev/null`, { timeout: 30000 })
       require('fs').unlinkSync(tmpPath)
       if (stdout.trim()) return stdout.trim()
-    } catch {
-      // pdftotext failed or returned empty
-    }
-    return `[PDF FILE (scanned or pdftotext failed)]`
+    } catch { /* try next method */ }
+
+    // Try pdftotext without layout
+    try {
+      const { stdout } = await execAsync(`pdftotext "${tmpPath}" - 2>/dev/null`, { timeout: 30000 })
+      require('fs').unlinkSync(tmpPath)
+      if (stdout.trim()) return stdout.trim()
+    } catch { /* try next method */ }
+
+    // Try strings (extract any embedded ASCII text)
+    try {
+      const { stdout } = await execAsync(`strings "${tmpPath}" | head -200`, { timeout: 15000 })
+      require('fs').unlinkSync(tmpPath)
+      // strings output often has noise; check if there's meaningful text
+      const lines = stdout.split('\n').filter(l => l.trim().length > 3)
+      if (lines.length > 5) return `[PDF with embedded text — extracted via strings]\n${lines.join('\n')}`
+    } catch { /* exhausted methods */ }
+
+    try { require('fs').unlinkSync(tmpPath) } catch { /* ignore cleanup errors */ }
+    return `[PDF FILE — text extraction failed. This may be a scanned/image PDF. Upload a text-based PDF or image file for analysis.]`
   }
 
   if (TEXT_EXTS.has(ext)) {
@@ -191,19 +208,22 @@ export async function POST(req: NextRequest) {
 
     // ──────────────────────────────────────────────────────────────────────────
     // Extract content from downloaded buffer
+    // For images: pass base64 directly to Vision API
+    // For PDFs/text: extract text
     // ──────────────────────────────────────────────────────────────────────────
-    let content: string
+    let content: string | undefined
+    let imageBase64: string | undefined
+    let imageMimeType: string | undefined
+
     if (isImage) {
-      // Read image as base64 for vision analysis
       const arrayBuffer = await fileBuffer.arrayBuffer()
-      const buffer = Buffer.from(arrayBuffer)
-      const base64 = buffer.toString('base64')
-      const mimeType = ext === '.png' ? 'image/png' : ext === '.gif' ? 'image/gif' : ext === '.webp' ? 'image/webp' : 'image/jpeg'
-      content = `[IMAGE_BASE64:${mimeType};${base64}]`
+      const buf = Buffer.from(arrayBuffer)
+      imageBase64 = buf.toString('base64')
+      imageMimeType = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : ext === '.gif' ? 'image/gif' : 'image/jpeg'
     } else {
       const arrayBuffer = await fileBuffer.arrayBuffer()
-      const buffer = Buffer.from(arrayBuffer)
-      content = await extractTextFromBuffer(buffer, ext)
+      const buf = Buffer.from(arrayBuffer)
+      content = await extractTextFromBuffer(buf, ext)
       if (content.startsWith('[UNSUPPORTED') || content.startsWith('[PDF FILE')) {
         return NextResponse.json({
           error: content,
@@ -218,15 +238,22 @@ export async function POST(req: NextRequest) {
     // ──────────────────────────────────────────────────────────────────────────
     const prompt = buildGPSAnalysisPrompt(
       doc.title || 'unknown',
-      content,
+      content || '[IMAGE — see attached image for visual analysis]',
       fileType,
       linkedPersonName || undefined,
       undefined
     )
 
     const systemPrompt = `You are Hermes, a genealogy research intelligence agent. Always respond with valid JSON only.`
+
+    const aiMessages: any[] = [{
+      role: 'user',
+      content: prompt,
+      ...(imageBase64 ? { imageBase64, imageMimeType } : {}),
+    }]
+
     const result = await routeChat(
-      [{ role: 'user', content: prompt }],
+      aiMessages,
       { deep: true },
       { system: systemPrompt, max_tokens: 4000 }
     )

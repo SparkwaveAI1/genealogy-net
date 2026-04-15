@@ -68,11 +68,24 @@ export default function DocumentUploader({
   // ── Person search state ──────────────────────────────────────────────────
   const [personQuery, setPersonQuery] = useState('')
   const [personResults, setPersonResults] = useState<GrampsPerson[]>([])
-  const [selectedPerson, setSelectedPerson] = useState<GrampsPerson | null>(null)
+  const [selectedPeople, setSelectedPeople] = useState<GrampsPerson[]>([])
   const [searchingPerson, setSearchingPerson] = useState(false)
   const [showDropdown, setShowDropdown] = useState(false)
   const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
+
+  function addPerson(person: GrampsPerson) {
+    if (!selectedPeople.some(p => p.gramps_id === person.gramps_id)) {
+      setSelectedPeople(prev => [...prev, person])
+    }
+    setPersonQuery('')
+    setPersonResults([])
+    setShowDropdown(false)
+  }
+
+  function removePerson(grampsId: string) {
+    setSelectedPeople(prev => prev.filter(p => p.gramps_id !== grampsId))
+  }
 
   // ── GPS Analysis state ───────────────────────────────────────────────────
   const [showAnalysis, setShowAnalysis] = useState(false)
@@ -160,10 +173,6 @@ export default function DocumentUploader({
   // ── Save to Wiki ──────────────────────────────────────────────────────────
   async function handleSave() {
     if (!file) return
-    if (contextType === 'dashboard' && !selectedPerson) {
-      setSaveError('Please search and select a person before saving.')
-      return
-    }
     setUploading(true)
     setSaveError(null)
 
@@ -209,8 +218,10 @@ export default function DocumentUploader({
     setSelectedActions(new Set())
     setExecutionResults({})
 
+    const selectedPerson = selectedPeople[0] ?? null
     const effectiveContextId = contextType === 'dashboard' ? selectedPerson?.gramps_id : contextId
     const effectiveContextName = contextType === 'dashboard' ? selectedPerson?.name : contextName
+    const allPeopleNames = selectedPeople.map(p => p.name).join(', ')
 
     try {
       const res = await fetch('/api/documents/analyze', {
@@ -220,7 +231,7 @@ export default function DocumentUploader({
           document_id: savedDocId,
           context_type: contextType === 'dashboard' ? 'person' : contextType,
           context_id: effectiveContextId,
-          context_name: effectiveContextName,
+          context_name: allPeopleNames || effectiveContextName,
         }),
       })
 
@@ -257,8 +268,10 @@ export default function DocumentUploader({
     if (actionsToRun.length === 0) return
 
     setExecuting(true)
+    const selectedPerson = selectedPeople[0] ?? null
     const effectiveContextId = contextType === 'dashboard' ? selectedPerson?.gramps_id : contextId
     const effectiveContextName = contextType === 'dashboard' ? selectedPerson?.name : contextName
+    const allPeopleNames = selectedPeople.map(p => p.name).join(', ')
 
     const results: Record<string, { success: boolean; message: string }> = {}
 
@@ -269,7 +282,9 @@ export default function DocumentUploader({
           document_id: savedDocId,
         }
         if (action.action_type === 'update_gramps' || action.action_type === 'create_gramps') {
-          payload.linked_person = effectiveContextId ? { gramps_id: effectiveContextId, name: effectiveContextName } : null
+          payload.linked_person = effectiveContextId
+            ? { gramps_id: effectiveContextId, name: allPeopleNames || effectiveContextName }
+            : null
         }
 
         const res = await fetch('/api/documents/execute-action', {
@@ -332,6 +347,7 @@ export default function DocumentUploader({
   }
 
   // ── Derived state ─────────────────────────────────────────────────────────
+  const selectedPerson = selectedPeople[0] ?? null
   const effectiveContextId = contextType === 'dashboard' ? selectedPerson?.gramps_id : contextId
   const effectiveContextName = contextType === 'dashboard' ? selectedPerson?.name : contextName
   const hasDocument = !!savedDocId
@@ -350,52 +366,66 @@ export default function DocumentUploader({
           <label className="text-[11px] font-semibold text-gray-600 uppercase tracking-wide block mb-1">
             Link to Person
           </label>
-          {!selectedPerson ? (
-            <div ref={dropdownRef} className="relative">
-              <input
-                type="text"
-                value={personQuery}
-                onChange={e => { setPersonQuery(e.target.value); setSelectedPerson(null) }}
-                onFocus={() => personResults.length > 0 && setShowDropdown(true)}
-                placeholder="Search for a person..."
-                className="w-full px-3 py-2 border border-[#D3D1C7] rounded-lg text-[13px] focus:outline-none focus:border-[#EF9F27]"
-              />
-              {showDropdown && personResults.length > 0 && (
-                <div className="absolute z-50 w-full mt-1 bg-white border border-[#D3D1C7] rounded-lg shadow-lg max-h-48 overflow-y-auto">
-                  {personResults.map(p => (
+
+          {/* Selected people chips */}
+          {selectedPeople.length > 0 && (
+            <div className="flex flex-wrap gap-2 mb-2">
+              {selectedPeople.map(p => (
+                <span
+                  key={p.gramps_id}
+                  className="inline-flex items-center gap-1 px-2 py-1 bg-[#FEF3E2] border border-[#EF9F27] rounded-full text-[12px] text-gray-800"
+                >
+                  {p.name}
+                  {p.birth_year && (
+                    <span className="text-gray-500 text-[11px]">
+                      {' '}{p.birth_year}{p.death_year ? `–${p.death_year}` : ''}
+                    </span>
+                  )}
+                  <button
+                    onClick={() => removePerson(p.gramps_id)}
+                    className="text-[#EF9F27] hover:text-[#d88d1f] font-bold leading-none ml-1"
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+
+          {/* Search input */}
+          <div ref={dropdownRef} className="relative">
+            <input
+              type="text"
+              value={personQuery}
+              onChange={e => { setPersonQuery(e.target.value); setShowDropdown(true) }}
+              onFocus={() => personResults.length > 0 && setShowDropdown(true)}
+              placeholder="Search to add more people..."
+              className="w-full px-3 py-2 border border-[#D3D1C7] rounded-lg text-[13px] focus:outline-none focus:border-[#EF9F27]"
+            />
+            {showDropdown && personResults.length > 0 && (
+              <div className="absolute z-50 w-full mt-1 bg-white border border-[#D3D1C7] rounded-lg shadow-lg max-h-48 overflow-y-auto">
+                {personResults
+                  .filter(p => !selectedPeople.some(sp => sp.gramps_id === p.gramps_id))
+                  .map(p => (
                     <button
                       key={p.gramps_id}
-                      onClick={() => {
-                        setSelectedPerson(p)
-                        setPersonQuery(p.name || 'Unknown')
-                        setShowDropdown(false)
-                        setPersonResults([])
-                      }}
-                      className="w-full text-left px-3 py-2 text-[13px] hover:bg-[#FEF3E2] transition-colors"
+                      onClick={() => addPerson(p)}
+                      className="w-full text-left px-3 py-2 text-[13px] hover:bg-[#FEF3E2] transition-colors flex items-center justify-between"
                     >
                       <span className="font-medium text-gray-900">{p.name}</span>
-                      {p.birth_year && (
-                        <span className="text-gray-500 ml-2">
-                          {p.birth_year}{p.death_year ? `–${p.death_year}` : ''}
+                      {p.birth_year ? (
+                        <span className="text-gray-500 text-[12px]">
+                          {p.birth_year}{p.death_year ? `–${p.death_year}` : '+'}
                         </span>
+                      ) : (
+                        <span className="text-gray-400 text-[11px]">add</span>
                       )}
                     </button>
                   ))}
-                </div>
-              )}
-              {searchingPerson && <p className="text-[11px] text-gray-400 mt-1">Searching...</p>}
-            </div>
-          ) : (
-            <div className="flex items-center gap-2 px-3 py-2 bg-[#FEF3E2] border border-[#EF9F27] rounded-lg">
-              <span className="font-medium text-[13px] text-gray-900 truncate flex-1">{selectedPerson.name}</span>
-              <button
-                onClick={() => { setSelectedPerson(null); setPersonQuery('') }}
-                className="text-[#EF9F27] hover:text-[#d88d1f] font-bold text-sm leading-none"
-              >
-                ×
-              </button>
-            </div>
-          )}
+              </div>
+            )}
+            {searchingPerson && <p className="text-[11px] text-gray-400 mt-1">Searching...</p>}
+          </div>
         </div>
       )}
 

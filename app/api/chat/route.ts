@@ -150,25 +150,43 @@ const TEXT_EXTS = new Set(['.txt', '.md', '.csv', '.rt', '.ged', '.gedcom']);
 
 async function extractText(buffer: Buffer, ext: string, mimeType: string, fileName: string): Promise<string> {
   if (IMAGE_EXTS.has(ext)) {
-    return `[IMAGE FILE]`;
+    // Images are now handled via Vision in attachRecentDocuments — this should not be reached
+    return `[IMAGE FILE — use Vision-capable model to analyze]`;
   }
 
   if (ext === '.pdf') {
-    try {
-      const fs = require('fs');
-      const { exec } = require('child_process');
-      const { promisify } = require('util');
-      const execAsync = promisify(exec);
+    const fs = require('fs');
+    const { exec } = require('child_process');
+    const { promisify } = require('util');
+    const execAsync = promisify(exec);
 
-      const tmpPath = `/tmp/doc-${Date.now()}.pdf`;
-      fs.writeFileSync(tmpPath, buffer);
+    const tmpPath = `/tmp/doc-${Date.now()}.pdf`;
+    fs.writeFileSync(tmpPath, buffer);
+
+    // Try pdftotext with layout
+    try {
       const { stdout } = await execAsync(`pdftotext -layout "${tmpPath}" - 2>/dev/null`, { timeout: 30000 });
       fs.unlinkSync(tmpPath);
       if (stdout.trim()) return stdout.trim();
-    } catch {
-      // pdftotext failed
-    }
-    return `[PDF FILE (scanned or pdftotext failed)]`;
+    } catch { /* try next */ }
+
+    // Try pdftotext without layout
+    try {
+      const { stdout } = await execAsync(`pdftotext "${tmpPath}" - 2>/dev/null`, { timeout: 30000 });
+      fs.unlinkSync(tmpPath);
+      if (stdout.trim()) return stdout.trim();
+    } catch { /* try next */ }
+
+    // Try strings (embedded ASCII text)
+    try {
+      const { stdout } = await execAsync(`strings "${tmpPath}" | head -200`, { timeout: 15000 });
+      fs.unlinkSync(tmpPath);
+      const lines = stdout.split('\n').filter((l: string) => l.trim().length > 3);
+      if (lines.length > 5) return `[PDF with embedded text — extracted via strings]\n${lines.join('\n')}`;
+    } catch { /* exhausted */ }
+
+    try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
+    return `[PDF FILE — text extraction failed. This may be a scanned/image PDF.]`;
   }
 
   if (TEXT_EXTS.has(ext) || mimeType.startsWith('text/')) {
@@ -251,9 +269,26 @@ async function attachRecentDocuments(
 
   const buf = Buffer.from(await buffer.arrayBuffer());
   const ext = path.extname(targetDoc.file_path).toLowerCase();
+  const isImage = IMAGE_EXTS.has(ext);
+
+  // ── For images: pass as base64 for Vision-capable AI models ─────────────
+  if (isImage) {
+    const mimeType = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : ext === '.gif' ? 'image/gif' : 'image/jpeg';
+    const base64 = buf.toString('base64');
+    const enrichedMsg = {
+      ...lastUserMsg,
+      imageBase64: base64,
+      imageMimeType: mimeType,
+    };
+    const result = [...messages];
+    const msgIndex = result.findIndex((m, i) => i === messages.length - 1 && m.role === 'user');
+    if (msgIndex !== -1) result[msgIndex] = enrichedMsg;
+    return result;
+  }
+
+  // ── For PDFs and text files: extract text ───────────────────────────────
   const content = await extractText(buf, ext, buffer.type || '', targetDoc.title);
 
-  // Attach document content to the last user message
   const enrichedMsg = {
     ...lastUserMsg,
     content: `${lastUserMsg.content}

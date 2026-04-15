@@ -7,6 +7,32 @@ const GRAMPS_PASSWORD = process.env.GRAMPS_PASSWORD || 'claw1234'
 let cachedToken: string | null = null
 let tokenExpiry: number = 0
 
+// Module-level cache: all events keyed by handle.
+// Built once per serverless cold-start, reused for all subsequent getPeopleWithDates calls.
+let allEventsCache: Map<string, GrampsEvent> | null = null
+let eventCacheLoading: Promise<Map<string, GrampsEvent>> | null = null
+
+/**
+ * Load ALL events from /events/ and cache them by handle.
+ * Single network call per serverless invocation; ~23k events.
+ */
+async function ensureEventCache(): Promise<Map<string, GrampsEvent>> {
+  if (allEventsCache) return allEventsCache
+  if (eventCacheLoading) return eventCacheLoading
+
+  eventCacheLoading = (async () => {
+    const events: any[] = await grampsRequest<any[]>('/events/')
+    const map = new Map<string, GrampsEvent>()
+    for (const e of events) {
+      if (e.handle) map.set(e.handle, e as GrampsEvent)
+    }
+    allEventsCache = map
+    return map
+  })()
+
+  return eventCacheLoading
+}
+
 /**
  * Authenticate with Gramps Web API and get JWT token
  */
@@ -105,59 +131,46 @@ export async function getPeople(search?: string): Promise<GrampsPerson[]> {
 
 /**
  * Get people with birth/death years included — for disambiguation in search UIs.
- * Fetches people + their events in parallel, then extracts dates synchronously.
+ * Uses module-level event cache (loaded once per cold-start) to look up birth/death
+ * events by handle — avoids N individual /events/{handle}/ calls (which return 404).
  */
-export async function getPeopleWithDates(search?: string, limit = 8): Promise<Array<GrampsPerson & { birth_year: number | null; death_year: number | null }>> {
+export async function getPeopleWithDates(
+  search?: string,
+  limit = 8,
+): Promise<Array<GrampsPerson & { birth_year: number | null; death_year: number | null }>> {
+  // 1. Get base people (with event_ref_list)
   let people: GrampsPerson[]
-
   if (search) {
-    // /search/ returns {handle, object:{...}} — transform to GrampsPerson[]
     const results = await grampsRequest<any[]>(`/search/?query=${encodeURIComponent(search)}`)
     people = results.map(transformSearchResult)
   } else {
-    // /people/ returns plain GrampsPerson[]
-    const keys = 'handle,gramps_id,primary_name,event_ref_list'
-    people = await grampsRequest<GrampsPerson[]>(`/people/?keys=${keys}`)
+    people = await grampsRequest<GrampsPerson[]>(
+      '/people/?keys=handle,gramps_id,primary_name,event_ref_list',
+    )
   }
 
   const limited = people.slice(0, limit)
 
-  // Collect all unique event refs
-  const eventRefs = new Set<string>()
-  for (const p of limited) {
-    if (p.event_ref_list) {
-      for (const er of p.event_ref_list) {
-        if (er.ref) eventRefs.add(er.ref)
-      }
-    }
-  }
+  // 2. Load event cache (once per serverless invocation)
+  const eventMap = await ensureEventCache()
 
-  // Batch-fetch all events in parallel
-  const eventResults = await Promise.all(
-    Array.from(eventRefs).map(ref => getEvent(ref).catch(() => null))
-  )
-
-  // Build handle → event map
-  const eventMap: Record<string, GrampsEvent> = {}
-  for (const evt of eventResults) {
-    if (evt) eventMap[evt.handle] = evt
-  }
-
-  // Extract birth/death years from cached events
-  return limited.map(p => {
+  // 3. Extract birth/death years using cached events
+  return limited.map((p) => {
     let birthYear: number | null = null
     let deathYear: number | null = null
 
     if (p.event_ref_list) {
       for (const er of p.event_ref_list) {
-        const evt = eventMap[er.ref]
+        const evt = eventMap.get(er.ref as string)
         if (!evt) continue
-        const type = evt.type?.string?.toLowerCase() || ''
-        if (type.includes('birth') && !birthYear && evt.date?.dateval) {
-          birthYear = Array.isArray(evt.date.dateval) ? evt.date.dateval[2] : null
+        const type = (evt.type?.string || '').toLowerCase()
+        const dateval = evt.date?.dateval
+        const year = Array.isArray(dateval) ? dateval[2] : null
+        if (type.includes('birth') && !birthYear && year) {
+          birthYear = year
         }
-        if (type.includes('death') && !deathYear && evt.date?.dateval) {
-          deathYear = Array.isArray(evt.date.dateval) ? evt.date.dateval[2] : null
+        if (type.includes('death') && !deathYear && year) {
+          deathYear = year
         }
       }
     }
