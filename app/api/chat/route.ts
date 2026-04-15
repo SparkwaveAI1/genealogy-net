@@ -101,9 +101,8 @@ export async function POST(req: NextRequest) {
 // ──────────────────────────────────────────────────────────────────────────
 
 async function saveUploadToSupabase(file: File, buffer: Buffer): Promise<{ documentId: string; filePath: string }> {
-  const ext = path.extname(file.name).toLowerCase() || '.' + file.name.split('.').pop();
   const slug = `${new Date().toISOString().slice(0, 10)}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '-').substring(0, 50)}`;
-  const storagePath = `raw/${new Date().toISOString().slice(0, 7)}/${slug}${ext}`;
+  const storagePath = `raw/${new Date().toISOString().slice(0, 7)}/${slug}`;
 
   const { error: uploadError } = await supabaseService.storage
     .from('documents')
