@@ -148,11 +148,11 @@ export async function POST(req: NextRequest) {
     }
 
     // ──────────────────────────────────────────────────────────────────────────
-    // Fetch document from Supabase — includes storage_path and linked people
+    // Fetch document from Supabase
     // ──────────────────────────────────────────────────────────────────────────
     const { data: doc, error: docError } = await supabaseService
       .from('documents')
-      .select('*, document_people!inner(people:person_id(gramps_id, name)), mystery_evidence(mystery_id)')
+      .select('id, title, file_path, url, document_type, description, date')
       .eq('id', document_id)
       .single()
 
@@ -161,7 +161,6 @@ export async function POST(req: NextRequest) {
     }
 
     const filePath = doc.file_path
-
     if (!filePath) {
       return NextResponse.json({
         error: 'Document has no file_path — upload may have failed',
@@ -171,15 +170,6 @@ export async function POST(req: NextRequest) {
 
     let linkedPersonGrampsId: string | null = context_type === 'person' ? context_id : null
     let linkedPersonName: string | null = context_type === 'person' ? context_name : null
-
-    // If document has linked people, grab the first one's gramps_id
-    if (!linkedPersonGrampsId && (doc as any).document_people?.length > 0) {
-      const firstLink = (doc as any).document_people[0]
-      if (firstLink.people) {
-        linkedPersonGrampsId = firstLink.people.gramps_id
-        linkedPersonName = firstLink.people.name || linkedPersonName
-      }
-    }
 
     // ──────────────────────────────────────────────────────────────────────────
     // Download file from Supabase Storage
