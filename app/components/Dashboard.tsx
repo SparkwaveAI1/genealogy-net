@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
-import DocumentUploader from './DocumentUploader'
 
 interface Message {
   role: 'user' | 'assistant'
@@ -435,12 +434,6 @@ export default function Dashboard() {
       {/* Right Panel */}
       <div className="w-[300px] overflow-y-auto bg-[#F5F2ED]">
         <div className="p-4 space-y-4">
-          {/* Document Upload */}
-          <div className="bg-[#FDFCFA] border border-[#D3D1C7] rounded-lg p-4">
-            <h3 className="text-[13px] font-semibold mb-3">Document Upload</h3>
-            <DocumentUploader contextType="dashboard" />
-          </div>
-
           {/* Active Mysteries */}
           <div className="bg-[#FDFCFA] border border-[#D3D1C7] rounded-lg p-4">
             <h3 className="text-[13px] font-semibold mb-3">Active Mysteries</h3>
