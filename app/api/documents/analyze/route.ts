@@ -344,6 +344,67 @@ export async function POST(req: NextRequest) {
       }, { status: 500 })
     }
 
+    // ── Save analysis results back to Supabase for future chat reference ────
+    // This populates raw_text so the chat route doesn't need to re-extract.
+    try {
+      // Build a human-readable summary from the analysis for raw_text
+      const rawTextParts: string[] = []
+      if (analysis.summary) rawTextParts.push(`SUMMARY: ${analysis.summary}`)
+      if (analysis.source_type) rawTextParts.push(`Source type: ${analysis.source_type}`)
+      if (analysis.information_type) rawTextParts.push(`Information type: ${analysis.information_type}`)
+      if (analysis.scenario) rawTextParts.push(`Scenario: ${analysis.scenario}`)
+      if (analysis.direct_evidence?.length) {
+        rawTextParts.push('\nDIRECT EVIDENCE:')
+        for (const e of analysis.direct_evidence) {
+          rawTextParts.push(`- ${e.fact || e.claim}: ${e.quote || ''} [${e.confidence || '?'}]`)
+        }
+      }
+      if (analysis.indirect_evidence?.length) {
+        rawTextParts.push('\nINDIRECT EVIDENCE:')
+        for (const e of analysis.indirect_evidence) {
+          rawTextParts.push(`- ${e.fact || e.claim}: ${e.reasoning || e.quote || ''} [${e.confidence || '?'}]`)
+        }
+      }
+      if (analysis.fan_clues?.length) {
+        rawTextParts.push('\nFAN CLUES:')
+        for (const f of analysis.fan_clues) {
+          rawTextParts.push(`- ${f.name || f.person || '?'}: ${f.relationship || f.role || ''} — ${f.notes || f.detail || ''}`)
+        }
+      }
+      if (analysis.conflicts?.length) {
+        rawTextParts.push('\nCONFLICTS:')
+        for (const c of analysis.conflicts) {
+          rawTextParts.push(`- ${c.description || c.conflict}: ${c.resolution || ''}`)
+        }
+      }
+      if (analysis.proposed_actions?.length) {
+        rawTextParts.push('\nPROPOSED ACTIONS:')
+        for (const a of analysis.proposed_actions) {
+          rawTextParts.push(`- [${a.action_type}] ${a.description} (${a.confidence || '?'})`)
+        }
+      }
+      // Include extracted text content if available
+      if (content) rawTextParts.unshift(`EXTRACTED TEXT:\n${content}\n`)
+
+      const rawText = rawTextParts.join('\n')
+
+      await supabaseService
+        .from('documents')
+        .update({
+          raw_text: rawText,
+          processing_status: 'analyzed',
+          processing_completed_at: new Date().toISOString(),
+          event_count: analysis.direct_evidence?.length || 0,
+          participant_count: analysis.fan_clues?.length || 0,
+        })
+        .eq('id', document_id)
+
+      console.log(`[Analyze] Saved raw_text (${rawText.length} chars) for document ${document_id}`)
+    } catch (saveErr) {
+      console.error('[Analyze] Failed to save analysis to Supabase:', saveErr)
+      // Non-fatal — analysis still returned to client
+    }
+
     return NextResponse.json({
       document_id,
       file_path: filePath,
