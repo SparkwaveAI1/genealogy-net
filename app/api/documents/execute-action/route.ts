@@ -67,6 +67,8 @@ async function executeCreateGramps(payload: {
 
     const result = await createPerson({
       primary_name: { first_name, surname_list },
+      birth_date: payload.changes?.birth_date,
+      death_date: payload.changes?.death_date,
     })
     const newGrampsId = result.gramps_id
 
