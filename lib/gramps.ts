@@ -377,7 +377,8 @@ export async function getPersonSiblings(grampsId: string): Promise<GrampsPerson[
  * Get event details
  */
 export async function getEvent(handleOrId: string): Promise<GrampsEvent> {
-  return grampsRequest<GrampsEvent>(`/events/${handleOrId}/`)
+  // NOTE: Gramps API requires NO trailing slash for event lookup
+  return grampsRequest<GrampsEvent>(`/events/${handleOrId}`)
 }
 
 /**
