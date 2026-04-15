@@ -131,8 +131,7 @@ export async function getPeople(search?: string): Promise<GrampsPerson[]> {
 
 /**
  * Get people with birth/death years included — for disambiguation in search UIs.
- * Uses module-level event cache (loaded once per cold-start) to look up birth/death
- * events by handle — avoids N individual /events/{handle}/ calls (which return 404).
+ * Fetches events per-person directly (no bulk cache needed).
  */
 export async function getPeopleWithDates(
   search?: string,
@@ -151,32 +150,42 @@ export async function getPeopleWithDates(
 
   const limited = people.slice(0, limit)
 
-  // 2. Load event cache (once per serverless invocation)
-  const eventMap = await ensureEventCache()
+  // 2. For each person, fetch their events directly and extract birth/death years
+  const results = await Promise.all(
+    limited.map(async (p) => {
+      let birthYear: number | null = null
+      let deathYear: number | null = null
 
-  // 3. Extract birth/death years using cached events
-  return limited.map((p) => {
-    let birthYear: number | null = null
-    let deathYear: number | null = null
+      if (p.event_ref_list && p.event_ref_list.length > 0) {
+        // Fetch events in parallel for this person
+        const eventPromises = p.event_ref_list.map((er: any) =>
+          grampsRequest<any>(`/events/${er.ref}`).catch(() => null)
+        )
+        const events = await Promise.all(eventPromises)
 
-    if (p.event_ref_list) {
-      for (const er of p.event_ref_list) {
-        const evt = eventMap.get(er.ref as string)
-        if (!evt) continue
-        const type = (evt.type?.string || '').toLowerCase()
-        const dateval = evt.date?.dateval
-        const year = Array.isArray(dateval) ? dateval[2] : null
-        if (type.includes('birth') && !birthYear && year) {
-          birthYear = year
-        }
-        if (type.includes('death') && !deathYear && year) {
-          deathYear = year
+        for (const evt of events) {
+          if (!evt) continue
+          // Handle both type formats: string "Birth" or object {string: "Birth"}
+          const rawType: any = evt.type
+          const typeStr: string = typeof rawType === 'string'
+            ? rawType.toLowerCase()
+            : (rawType?.string || '').toLowerCase()
+          const dateval = evt.date?.dateval
+          const year = Array.isArray(dateval) ? dateval[2] : null
+          if (typeStr.includes('birth') && !birthYear && year) {
+            birthYear = year
+          }
+          if (typeStr.includes('death') && !deathYear && year) {
+            deathYear = year
+          }
         }
       }
-    }
 
-    return { ...p, birth_year: birthYear, death_year: deathYear }
-  })
+      return { ...p, birth_year: birthYear, death_year: deathYear }
+    })
+  )
+
+  return results
 }
 
 /**
