@@ -1,12 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseService } from '@/lib/supabase-service'
-import { updatePerson, createPerson, getPerson, getToken } from '@/lib/gramps'
-import fs from 'fs'
+import { updatePerson, createPerson, getPerson } from '@/lib/gramps'
 import path from 'path'
-
-const WIKI_WIKI = '/root/genealogy-wiki/wiki'
-const WIKI_INDEX = '/root/genealogy-wiki/index.md'
-const WIKI_LOG = '/root/genealogy-wiki/log.md'
 
 function slugify(name: string): string {
   return name
@@ -15,6 +10,10 @@ function slugify(name: string): string {
     .replace(/^-|-$/g, '')
     .slice(0, 60)
 }
+
+// ──────────────────────────────────────────────────────────────────────────
+// Gramps actions — these already work over HTTP
+// ──────────────────────────────────────────────────────────────────────────
 
 async function executeUpdateGramps(payload: {
   gramps_id: string
@@ -90,18 +89,21 @@ async function executeCreateGramps(payload: {
   }
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// Wiki action — writes to Supabase wiki_pages table (replaces filesystem)
+// ──────────────────────────────────────────────────────────────────────────
+
 async function executeUpdateWiki(payload: {
   document_id: string
-  wiki_raw_path: string
+  storage_path: string
   analysis: any
   linked_person?: { gramps_id: string; name: string } | null
-}): Promise<{ success: boolean; error?: string; wiki_path?: string }> {
+}): Promise<{ success: boolean; error?: string; wiki_slug?: string }> {
   try {
-    const { wiki_raw_path, analysis, linked_person } = payload
-    const ext = path.extname(wiki_raw_path)
-    const baseName = path.basename(wiki_raw_path, ext).replace(/\.[^.]+$/, '')
+    const { storage_path, analysis, linked_person } = payload
+    const ext = path.extname(storage_path)
+    const baseName = path.basename(storage_path, ext).replace(/\.[^.]+$/, '')
     const slug = slugify(baseName)
-    const wikiSrcPath = `/root/genealogy-wiki/wiki/sources/${slug}.md`
 
     const a = analysis.document_analysis
     const allNames = [
@@ -111,60 +113,91 @@ async function executeUpdateWiki(payload: {
     ].filter(Boolean)
     const keyPeople = Array.from(new Set(allNames.filter(Boolean))) as string[]
 
-    const frontmatter = [
-      '---',
-      `title: "${(analysis.summary || slug).slice(0, 80).replace(/"/g, '\\"')}"`,
-      `type: ${a.record_type || 'document'}`,
-      `date: "${a.date_of_record || ''}"`,
-      `location: "${a.location || ''}"`,
-      `key_people: [${keyPeople.map((n: string) => `"${n}"`).join(', ')}]`,
-      `gramps_ids: [${linked_person ? `"${linked_person.gramps_id}"` : ''}]`,
-      `confidence: ${a.direct_evidence?.length > 0 ? 'confirmed' : 'probable'}`,
-      `source_file: "${wiki_raw_path}"`,
-      `scenario: ${a.scenario}`,
-      `source_classification: ${a.source_classification}`,
-      `information_type: ${a.information_type}`,
-      '---',
+    const frontmatter = {
+      title: (analysis.summary || slug).slice(0, 80),
+      type: a.record_type || 'document',
+      date: a.date_of_record || null,
+      location: a.location || null,
+      key_people: keyPeople,
+      gramps_ids: linked_person ? [linked_person.gramps_id] : [],
+      confidence: a.direct_evidence?.length > 0 ? 'confirmed' : 'probable',
+      source_file: storage_path,
+      scenario: a.scenario,
+      source_classification: a.source_classification,
+      information_type: a.information_type,
+    }
+
+    const content = [
+      `# ${slug.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}`,
+      ``,
+      `## Summary`,
+      analysis.summary || 'No summary available.',
+      ``,
+      `## GPS Analysis`,
+      ``,
+      `### Direct Evidence`,
+      ...(a.direct_evidence || []).map((e: any) =>
+        `- **${e.fact}** (${e.confidence}) — "${e.quote}" [${e.subject}]`
+      ) || ['_None identified._'],
+      ``,
+      `### Indirect Evidence`,
+      ...(a.indirect_evidence || []).map((e: any) =>
+        `- **${e.inference}** (${e.confidence}) — ${e.supporting_detail} [${e.subject}]`
+      ) || ['_None identified._'],
+      ``,
+      `### FAN Clues`,
+      ...(a.fan_clues || []).map((f: any) =>
+        `- **${f.name}**: ${f.relationship_hint} — ${f.context}`
+      ) || ['_None identified._'],
+      ``,
+      `### Conflicts/Flags`,
+      ...(a.conflicts || []).map((c: any) =>
+        `- **${c.issue}**: ${c.detail}`
+      ) || ['_None._'],
+      ``,
+      `### Follow-Up Records`,
+      ...(a.follow_up_records || []).map((r: any, i: number) =>
+        `${i + 1}. ${r}`
+      ) || ['_None suggested._'],
+      ``,
+      `## Proposed Actions (from analysis)`,
+      ...(analysis.proposed_actions || []).map((act: any) =>
+        `- [${act.action_type}] ${act.description} — ${act.confidence}`
+      ),
     ].join('\n')
 
-    const content = `${frontmatter}\n\n# ${slug.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}\n\n## Summary\n${analysis.summary || 'No summary available.'}\n\n## GPS Analysis\n\n### Direct Evidence\n${(a.direct_evidence || []).map((e: any) => `- **${e.fact}** (${e.confidence}) — "${e.quote}" [${e.subject}]`).join('\n') || '_None identified._'}\n\n### Indirect Evidence\n${(a.indirect_evidence || []).map((e: any) => `- **${e.inference}** (${e.confidence}) — ${e.supporting_detail} [${e.subject}]`).join('\n') || '_None identified._'}\n\n### FAN Clues\n${(a.fan_clues || []).map((f: any) => `- **${f.name}**: ${f.relationship_hint} — ${f.context}`).join('\n') || '_None identified._'}\n\n### Conflicts/Flags\n${(a.conflicts || []).map((c: any) => `- **${c.issue}**: ${c.detail}`).join('\n') || '_None._'}\n\n### Follow-Up Records\n${(a.follow_up_records || []).map((r: any, i: number) => `${i + 1}. ${r}`).join('\n') || '_None suggested._'}\n\n## Proposed Actions (from analysis)\n${(analysis.proposed_actions || []).map((act: any) => `- [${act.action_type}] ${act.description} — ${act.confidence}`).join('\n')}\n`
+    // Upsert wiki page in Supabase
+    const { data: wikiData, error: wikiError } = await supabaseService
+      .from('wiki_pages')
+      .upsert({
+        slug,
+        title: frontmatter.title,
+        page_type: a.record_type || 'document',
+        content,
+        frontmatter,
+        storage_path: storage_path,
+        document_id: payload.document_id,
+        updated_at: new Date().toISOString(),
+      }, {
+        onConflict: 'slug',
+      })
+      .select('id, slug')
+      .single()
 
-    fs.writeFileSync(wikiSrcPath, content)
-
-    // Update index
-    try {
-      let index = fs.readFileSync(WIKI_INDEX, 'utf-8')
-      const today = new Date().toISOString().slice(0, 10)
-      const newEntry = `| ${slug.replace(/-/g, ' ')} | ${today} | ${a.record_type || 'document'} | [source](wiki/sources/${slug}.md) |`
-      if (!index.includes(newEntry)) {
-        if (index.includes('## Sources')) {
-          // Find the Sources table header line and insert after it
-          const tableHeaderMatch = index.match(/(\| --- \+ \[source\]\(wiki\/sources\/.*\.md\) \|\n)/)
-          if (tableHeaderMatch) {
-            index = index.replace(tableHeaderMatch[0], tableHeaderMatch[0] + newEntry + '\n')
-          }
-        } else {
-          index += '\n## Sources\n\n| Title | Date | Type | Link |\n| --- | --- | --- | --- |\n' + newEntry + '\n'
-        }
-        fs.writeFileSync(WIKI_INDEX, index)
-      }
-    } catch (e) {
-      console.warn('[Wiki] index update failed:', e)
+    if (wikiError) {
+      console.error('[ExecuteAction] wiki_pages upsert error:', wikiError)
+      return { success: false, error: wikiError.message }
     }
 
-    // Append to log
-    try {
-      const logEntry = `\n## ${new Date().toISOString()} — Document Analysis\n\n- **File:** ${path.basename(wiki_raw_path)}\n- **Analysis:** ${analysis.summary?.slice(0, 200) || 'See source page'}\n- **Proposed actions:** ${(analysis.proposed_actions || []).length}\n- **Wiki page:** wiki/sources/${slug}.md\n`
-      fs.appendFileSync(WIKI_LOG, logEntry)
-    } catch (e) {
-      console.warn('[Wiki] log append failed:', e)
-    }
-
-    return { success: true, wiki_path: wikiSrcPath }
+    return { success: true, wiki_slug: slug }
   } catch (error: any) {
     return { success: false, error: error.message }
   }
 }
+
+// ──────────────────────────────────────────────────────────────────────────
+// Mystery linking — already works (Supabase only)
+// ──────────────────────────────────────────────────────────────────────────
 
 async function executeLinkMystery(payload: {
   document_id: string
@@ -189,6 +222,10 @@ async function executeLinkMystery(payload: {
   }
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// Route handler
+// ──────────────────────────────────────────────────────────────────────────
+
 export async function POST(req: NextRequest) {
   try {
     const { action_type, payload } = await req.json()
@@ -197,7 +234,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'action_type and payload are required' }, { status: 400 })
     }
 
-    let result: { success: boolean; error?: string; gramps_id?: string; wiki_path?: string }
+    let result: { success: boolean; error?: string; gramps_id?: string; wiki_slug?: string }
 
     switch (action_type) {
       case 'update_gramps':

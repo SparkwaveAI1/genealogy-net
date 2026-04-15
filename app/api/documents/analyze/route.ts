@@ -1,9 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { supabaseService } from '@/lib/supabase-service'
 import { routeChat } from '@/lib/ai-router'
-import fs from 'fs'
 import path from 'path'
-import { readFile } from 'fs/promises'
 import { exec } from 'child_process'
 import { promisify } from 'util'
 
@@ -12,27 +10,27 @@ const execAsync = promisify(exec)
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.tiff', '.heic'])
 const TEXT_EXTS = new Set(['.txt', '.md', '.csv', '.rt', '.ged', '.gedcom'])
 
-async function extractTextContent(filePath: string): Promise<string> {
-  const ext = path.extname(filePath).toLowerCase()
-
+async function extractTextFromBuffer(buffer: Buffer, ext: string): Promise<string> {
   if (IMAGE_EXTS.has(ext)) {
-    // For images, return the path — we'll use vision in the AI call
-    return `[IMAGE FILE: ${filePath}]`
+    return `[IMAGE FILE]`
   }
 
   if (ext === '.pdf') {
     try {
-      const { stdout } = await execAsync(`pdftotext -layout "${filePath}" - 2>/dev/null`, { timeout: 30000 })
+      // Write buffer to temp file for pdftotext
+      const tmpPath = `/tmp/doc-extract-${Date.now()}.pdf`
+      require('fs').writeFileSync(tmpPath, buffer)
+      const { stdout } = await execAsync(`pdftotext -layout "${tmpPath}" - 2>/dev/null`, { timeout: 30000 })
+      require('fs').unlinkSync(tmpPath)
       if (stdout.trim()) return stdout.trim()
     } catch {
       // pdftotext failed or returned empty
     }
-    // Fall back to indication that it's a PDF needing visual analysis
-    return `[PDF FILE (scanned or pdftotext failed): ${filePath}]`
+    return `[PDF FILE (scanned or pdftotext failed)]`
   }
 
   if (TEXT_EXTS.has(ext)) {
-    return readFile(filePath, 'utf-8')
+    return buffer.toString('utf-8')
   }
 
   return `[UNSUPPORTED FILE TYPE: ${ext}]`
@@ -149,7 +147,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'document_id is required' }, { status: 400 })
     }
 
-    // Fetch document from Supabase
+    // ──────────────────────────────────────────────────────────────────────────
+    // Fetch document from Supabase — includes storage_path and linked people
+    // ──────────────────────────────────────────────────────────────────────────
     const { data: doc, error: docError } = await supabaseService
       .from('documents')
       .select('*, document_people!inner(people:person_id(gramps_id, name)), mystery_evidence(mystery_id)')
@@ -160,10 +160,17 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Document not found' }, { status: 404 })
     }
 
-    // Try to get wiki path from document_people if context
-    let wikiRawPath = (doc as any).wiki_raw_path || null
-    let linkedPersonGrampsId = context_type === 'person' ? context_id : null
-    let linkedPersonName = context_type === 'person' ? context_name : null
+    const filePath = doc.file_path
+
+    if (!filePath) {
+      return NextResponse.json({
+        error: 'Document has no file_path — upload may have failed',
+        doc_title: doc.title,
+      }, { status: 404 })
+    }
+
+    let linkedPersonGrampsId: string | null = context_type === 'person' ? context_id : null
+    let linkedPersonName: string | null = context_type === 'person' ? context_name : null
 
     // If document has linked people, grab the first one's gramps_id
     if (!linkedPersonGrampsId && (doc as any).document_people?.length > 0) {
@@ -174,63 +181,51 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Build file path — wiki raw files follow: /root/genealogy-wiki/raw/{date}-{slug}.{ext}
-    // We stored title which is the file name; reconstruct the path
-    if (!wikiRawPath && doc.title) {
-      // Try common locations
-      const possibleDirs = ['/root/genealogy-wiki/raw']
-      const baseName = doc.title.replace(/\.[^.]+$/, '')
-      for (const dir of possibleDirs) {
-        try {
-          const files = fs.readdirSync(dir)
-          const match = files.find(f => f.includes(baseName))
-          if (match) {
-            wikiRawPath = path.join(dir, match)
-            break
-          }
-        } catch { /* dir doesn't exist */ }
-      }
-    }
+    // ──────────────────────────────────────────────────────────────────────────
+    // Download file from Supabase Storage
+    // ──────────────────────────────────────────────────────────────────────────
+    const { data: fileBuffer, error: downloadError } = await supabaseService.storage
+      .from('documents')
+      .download(filePath)
 
-    // Also try using the document's stored path if available
-    if (!wikiRawPath && (doc as any).source) {
-      const src = (doc as any).source
-      if (src.startsWith('/root/genealogy-wiki/raw') && fs.existsSync(src)) {
-        wikiRawPath = src
-      }
-    }
-
-    if (!wikiRawPath || !fs.existsSync(wikiRawPath)) {
+    if (downloadError || !fileBuffer) {
       return NextResponse.json({
-        error: `Could not locate file on disk. Wiki path: ${wikiRawPath || 'unknown'}`,
-        doc_title: doc.title,
-      }, { status: 404 })
+        error: `Failed to download from Supabase Storage: ${downloadError?.message || 'unknown error'}`,
+        file_path: filePath,
+      }, { status: 500 })
     }
 
-    const ext = path.extname(wikiRawPath).toLowerCase()
+    const ext = path.extname(filePath).toLowerCase()
     const isImage = IMAGE_EXTS.has(ext)
     const fileType = isImage ? 'image' : (ext === '.pdf' ? 'pdf' : 'text')
 
-    // Extract content
+    // ──────────────────────────────────────────────────────────────────────────
+    // Extract content from downloaded buffer
+    // ──────────────────────────────────────────────────────────────────────────
     let content: string
     if (isImage) {
       // Read image as base64 for vision analysis
-      const imageBuffer = fs.readFileSync(wikiRawPath)
-      const base64 = imageBuffer.toString('base64')
+      const arrayBuffer = await fileBuffer.arrayBuffer()
+      const buffer = Buffer.from(arrayBuffer)
+      const base64 = buffer.toString('base64')
       const mimeType = ext === '.png' ? 'image/png' : ext === '.gif' ? 'image/gif' : ext === '.webp' ? 'image/webp' : 'image/jpeg'
       content = `[IMAGE_BASE64:${mimeType};${base64}]`
     } else {
-      content = await extractTextContent(wikiRawPath)
+      const arrayBuffer = await fileBuffer.arrayBuffer()
+      const buffer = Buffer.from(arrayBuffer)
+      content = await extractTextFromBuffer(buffer, ext)
       if (content.startsWith('[UNSUPPORTED') || content.startsWith('[PDF FILE')) {
         return NextResponse.json({
           error: content,
-          file_path: wikiRawPath,
+          file_path: filePath,
           needs_visual_analysis: true,
         }, { status: 422 })
       }
     }
 
-    // Build the prompt
+    // ──────────────────────────────────────────────────────────────────────────
+    // Call AI for GPS analysis
+    // ──────────────────────────────────────────────────────────────────────────
     const prompt = buildGPSAnalysisPrompt(
       doc.title || 'unknown',
       content,
@@ -239,7 +234,6 @@ export async function POST(req: NextRequest) {
       undefined
     )
 
-    // Call AI
     const systemPrompt = `You are Hermes, a genealogy research intelligence agent. Always respond with valid JSON only.`
     const result = await routeChat(
       [{ role: 'user', content: prompt }],
@@ -254,7 +248,6 @@ export async function POST(req: NextRequest) {
     // Parse JSON response
     let analysis: any
     try {
-      // Try to extract JSON from response (might be wrapped in markdown)
       const jsonMatch = result.message.match(/\{[\s\S]*\}/)
       if (jsonMatch) {
         analysis = JSON.parse(jsonMatch[0])
@@ -271,7 +264,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       document_id,
-      wiki_raw_path: wikiRawPath,
+      file_path: filePath,
       linked_person: linkedPersonGrampsId ? { gramps_id: linkedPersonGrampsId, name: linkedPersonName } : null,
       file_type: fileType,
       analysis,
