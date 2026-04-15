@@ -409,19 +409,23 @@ export default function DocumentUploader({
 
       {/* ── File picker ── */}
       <div>
-        <label className="text-[11px] font-semibold text-gray-600 uppercase tracking-wide block mb-1">
+        <label
+          htmlFor="doc-upload-input"
+          className="text-[11px] font-semibold text-gray-600 uppercase tracking-wide block mb-1"
+        >
           Document
         </label>
         <input
+          id="doc-upload-input"
           ref={fileInputRef}
           type="file"
           accept=".pdf,.jpg,.jpeg,.png,.gif,.webp,.txt,.md,.csv,.ged,.gedcom"
           onChange={handleFileSelect}
           className="hidden"
         />
-        <div
-          onClick={() => fileInputRef.current?.click()}
-          className="border-2 border-dashed border-[#D3D1C7] rounded-xl p-6 text-center cursor-pointer hover:border-[#EF9F27] transition-colors"
+        <label
+          htmlFor="doc-upload-input"
+          className="block border-2 border-dashed border-[#D3D1C7] rounded-xl p-6 text-center cursor-pointer hover:border-[#EF9F27] transition-colors"
         >
           {file ? (
             <div>
@@ -431,7 +435,7 @@ export default function DocumentUploader({
           ) : (
             <p className="text-[13px] text-gray-500">Drop a file or click to select</p>
           )}
-        </div>
+        </label>
       </div>
 
       {/* ── Document type ── */}
@@ -462,7 +466,7 @@ export default function DocumentUploader({
       {/* ── Save button ── */}
       <button
         onClick={handleSave}
-        disabled={!file || uploading || (contextType === 'dashboard' && !selectedPerson && !effectiveContextId)}
+        disabled={!file || uploading}
         className="w-full bg-[#EF9F27] text-white py-3 rounded-lg text-[14px] font-semibold hover:bg-[#d88d1f] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
       >
         {uploading ? 'Saving...' : savedDocId ? '✓ Saved — click to re-save' : 'Save to Wiki'}
