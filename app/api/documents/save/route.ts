@@ -16,10 +16,10 @@ function slugify(name: string): string {
     .slice(0, 60)
 }
 
-function fileToWiki(data: Buffer, ext: string, slug: string): { rawPath: string; sourcePath: string } {
+function fileToWiki(data: Buffer, ext: string, slug: string): { rawPath: string; srcPath: string } {
   const today = new Date().toISOString().slice(0, 10)
   const rawPath = `${WIKI_RAW}/${today}-${slug}.${ext}`
-  const sourcePath = `${WIKI_SOURCES}/${slug}.md`
+  const srcPath = `${WIKI_SOURCES}/${slug}.md`
 
   // Write raw file
   fs.writeFileSync(rawPath, data)
@@ -39,7 +39,7 @@ function fileToWiki(data: Buffer, ext: string, slug: string): { rawPath: string;
 
   const content = `${frontmatter}\n\n# ${slug.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}\n\nDocument uploaded via GRIP.\n`
 
-  fs.writeFileSync(sourcePath, content)
+  fs.writeFileSync(srcPath, content)
 
   // Update index.md — append to sources table if section exists
   try {
@@ -66,7 +66,7 @@ function fileToWiki(data: Buffer, ext: string, slug: string): { rawPath: string;
     console.warn('[Wiki] log.md append failed:', e)
   }
 
-  return { rawPath, sourcePath }
+  return { rawPath, srcPath }
 }
 
 export async function POST(req: NextRequest) {
@@ -91,7 +91,7 @@ export async function POST(req: NextRequest) {
     const slug = slugify(baseName)
 
     // File to wiki
-    const { rawPath, sourcePath } = fileToWiki(buffer, ext, slug)
+    const { rawPath, srcPath } = fileToWiki(buffer, ext, slug)
 
     // Save to Supabase
     const { data: docData, error: docError } = await supabaseService
@@ -139,7 +139,7 @@ export async function POST(req: NextRequest) {
       success: true,
       document_id: documentId,
       wiki_raw: rawPath,
-      wiki_source: sourcePath,
+      wiki_source: srcPath,
       message: `Saved${contextName ? ` for ${contextName}` : ''}`,
     })
   } catch (error: any) {

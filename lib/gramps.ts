@@ -39,7 +39,7 @@ async function authenticate(): Promise<string> {
 /**
  * Get valid JWT token, refreshing if necessary
  */
-async function getToken(): Promise<string> {
+export async function getToken(): Promise<string> {
   if (cachedToken && Date.now() < tokenExpiry) {
     return cachedToken
   }
@@ -353,6 +353,25 @@ export async function updatePerson(grampsId: string, data: Partial<GrampsPerson>
     method: 'PUT',
     body: JSON.stringify(data),
   })
+}
+
+/**
+ * Create a new person in Gramps Web
+ */
+export async function createPerson(data: {
+  primary_name: { first_name: string; surname_list: Array<{ surname: string }> }
+  birth_date?: string
+  death_date?: string
+}): Promise<{ gramps_id: string }> {
+  const payload = {
+    ...data,
+    gramps_id: 'new',
+  }
+  const result = await grampsRequest<any>('/people/', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+  return { gramps_id: result.gramps_id || result.id }
 }
 
 /**
