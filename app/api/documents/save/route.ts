@@ -81,7 +81,7 @@ export async function POST(req: NextRequest) {
     if (contextType === 'person' && contextId) {
       const { error: linkError } = await supabaseService
         .from('document_people')
-        .insert([{ document_id: documentId, person_id: contextId }])
+        .insert([{ document_id: documentId, person_id: contextId, role: 'subject' }])
       if (linkError) console.warn('[Document/Save] person link error:', linkError.message)
     }
 
