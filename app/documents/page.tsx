@@ -12,7 +12,7 @@ export default function DocumentsPage() {
             Upload a document to analyze, chat about it, and save findings to your tree.
           </p>
         </div>
-        <DocumentUploader standalone />
+        <DocumentUploader standalone contextType="dashboard" />
       </div>
     </div>
   )
