@@ -401,12 +401,28 @@ export default async function PersonPage({ params }: PageProps) {
           )}
 
           {/* Research Notes */}
-          {supabaseData?.bio && (
+          {(supabaseData?.bio || (person.note_list && person.note_list.length > 0)) && (
             <div className="bg-[#FDFCFA] border border-[#D3D1C7] rounded-lg p-3">
               <h3 className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-2">
                 Research Notes
               </h3>
-              <div className="text-[11px] text-gray-700 whitespace-pre-wrap leading-relaxed">{supabaseData.bio}</div>
+              <div className="space-y-2">
+                {supabaseData?.bio && (
+                  <div className="text-[11px] text-gray-700 whitespace-pre-wrap leading-relaxed">
+                    {supabaseData.bio}
+                  </div>
+                )}
+                {person.note_list && person.note_list.length > 0 && (
+                  <div className="space-y-1.5">
+                    {supabaseData?.bio && <div className="h-px bg-[#D3D1C7] my-2"></div>}
+                    {person.note_list.map((note, idx) => (
+                      <div key={idx} className="text-[11px] text-gray-700 leading-relaxed">
+                        {note.text || note.ref}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>

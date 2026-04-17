@@ -139,6 +139,11 @@ export interface GrampsPerson {
   }>
   family_list?: string[]
   parent_family_list?: string[]
+  note_list?: Array<{
+    ref?: string
+    text?: string
+    type?: string
+  }>
 }
 
 export interface GrampsEvent {
