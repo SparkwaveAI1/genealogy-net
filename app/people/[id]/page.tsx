@@ -2,7 +2,7 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { GrampsPerson } from '@/lib/types'
 import { createServerSupabaseClient } from '@/lib/supabase-server'
-import { getPerson, getPersonParents, getPersonChildren, getPersonSpouses, getPersonSiblings, getPersonBirthYear, getPersonDeathYear, getPersonBirthEvent, getPersonDeathEvent, getPersonEvents, formatEventDate } from '@/lib/gramps'
+import { getPerson, getPersonParents, getPersonChildren, getPersonSpouses, getPersonSiblings, getPersonBirthYear, getPersonDeathYear, getPersonBirthEvent, getPersonDeathEvent, getPersonEvents, formatEventDate, extractEventType } from '@/lib/gramps'
 import PersonDocuments from '@/app/components/PersonDocuments'
 
 function getInitials(person: GrampsPerson): string {
@@ -296,11 +296,7 @@ export default async function PersonPage({ params }: PageProps) {
             <h2 className="text-[15px] font-semibold mb-3">Life Events</h2>
             <div className="space-y-3">
               {allEvents.map((eventData, idx) => {
-                // Handle both string and object event types
-                const rawType = eventData.event.type
-                const eventType = typeof rawType === 'string'
-                  ? rawType
-                  : (rawType?.string || 'Event')
+                const eventType = extractEventType(eventData.event)
                 const date = formatEventDate(eventData.event.date?.dateval)
                 const placeName = eventData.place?.name?.value || eventData.place?.title || ''
                 const description = eventData.event.description || ''

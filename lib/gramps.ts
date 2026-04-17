@@ -500,10 +500,7 @@ export async function getPersonBirthYear(person: GrampsPerson): Promise<number |
   try {
     for (const eventRef of person.event_ref_list) {
       const event = await getEvent(eventRef.ref)
-      // Handle both string and object event types
-      const eventType = typeof event.type === 'string'
-        ? event.type
-        : (event.type?.string || '')
+      const eventType = extractEventType(event)
       if (eventType.toLowerCase().includes('birth')) {
         if (event.date?.dateval) {
           const dateval = event.date.dateval
@@ -530,10 +527,7 @@ export async function getPersonDeathYear(person: GrampsPerson): Promise<number |
   try {
     for (const eventRef of person.event_ref_list) {
       const event = await getEvent(eventRef.ref)
-      // Handle both string and object event types
-      const eventType = typeof event.type === 'string'
-        ? event.type
-        : (event.type?.string || '')
+      const eventType = extractEventType(event)
       if (eventType.toLowerCase().includes('death')) {
         if (event.date?.dateval) {
           const dateval = event.date.dateval
@@ -585,6 +579,31 @@ export function formatEventDate(dateval: any[] | undefined): string {
 }
 
 /**
+ * Extract human-readable event type string from Gramps event
+ * Checks event.type._type, event.type (if string), or event.type.string
+ */
+export function extractEventType(event: GrampsEvent): string {
+  if (!event.type) return 'Event'
+
+  // Check for _type property (e.g., event.type._type)
+  if (typeof event.type === 'object' && (event.type as any)._type) {
+    return (event.type as any)._type
+  }
+
+  // Check if type is a string directly
+  if (typeof event.type === 'string') {
+    return event.type
+  }
+
+  // Check for string property (e.g., event.type.string)
+  if (typeof event.type === 'object' && (event.type as any).string) {
+    return (event.type as any).string
+  }
+
+  return 'Event'
+}
+
+/**
  * Get person's birth event with full date and place
  */
 export async function getPersonBirthEvent(person: GrampsPerson): Promise<{ event: GrampsEvent; place: any } | null> {
@@ -595,7 +614,8 @@ export async function getPersonBirthEvent(person: GrampsPerson): Promise<{ event
   try {
     for (const eventRef of person.event_ref_list) {
       const event = await getEvent(eventRef.ref)
-      if (event.type.string.toLowerCase().includes('birth')) {
+      const eventType = extractEventType(event)
+      if (eventType.toLowerCase().includes('birth')) {
         let place = null
         if (event.place) {
           const placeHandle = typeof event.place === 'string' ? event.place : (event.place as any).ref || event.place
@@ -622,7 +642,8 @@ export async function getPersonDeathEvent(person: GrampsPerson): Promise<{ event
   try {
     for (const eventRef of person.event_ref_list) {
       const event = await getEvent(eventRef.ref)
-      if (event.type.string.toLowerCase().includes('death')) {
+      const eventType = extractEventType(event)
+      if (eventType.toLowerCase().includes('death')) {
         let place = null
         if (event.place) {
           const placeHandle = typeof event.place === 'string' ? event.place : (event.place as any).ref || event.place
