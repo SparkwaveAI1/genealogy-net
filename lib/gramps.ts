@@ -500,7 +500,11 @@ export async function getPersonBirthYear(person: GrampsPerson): Promise<number |
   try {
     for (const eventRef of person.event_ref_list) {
       const event = await getEvent(eventRef.ref)
-      if (event.type.string.toLowerCase().includes('birth')) {
+      // Handle both string and object event types
+      const eventType = typeof event.type === 'string'
+        ? event.type
+        : (event.type?.string || '')
+      if (eventType.toLowerCase().includes('birth')) {
         if (event.date?.dateval) {
           const dateval = event.date.dateval
           // Dateval format: [day, month, year] or [day, month, year, boolean, day2, month2, year2]
@@ -526,7 +530,11 @@ export async function getPersonDeathYear(person: GrampsPerson): Promise<number |
   try {
     for (const eventRef of person.event_ref_list) {
       const event = await getEvent(eventRef.ref)
-      if (event.type.string.toLowerCase().includes('death')) {
+      // Handle both string and object event types
+      const eventType = typeof event.type === 'string'
+        ? event.type
+        : (event.type?.string || '')
+      if (eventType.toLowerCase().includes('death')) {
         if (event.date?.dateval) {
           const dateval = event.date.dateval
           return Array.isArray(dateval) ? dateval[2] : null
