@@ -2,7 +2,7 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { GrampsPerson } from '@/lib/types'
 import { createServerSupabaseClient } from '@/lib/supabase-server'
-import { getPerson, getPersonParents, getPersonChildren, getPersonSpouses, getPersonSiblings, getPersonBirthYear, getPersonDeathYear } from '@/lib/gramps'
+import { getPerson, getPersonParents, getPersonChildren, getPersonSpouses, getPersonSiblings, getPersonBirthYear, getPersonDeathYear, getPersonBirthEvent, getPersonDeathEvent, getPersonEvents, formatEventDate } from '@/lib/gramps'
 import PersonDocuments from '@/app/components/PersonDocuments'
 
 function getInitials(person: GrampsPerson): string {
@@ -11,9 +11,20 @@ function getInitials(person: GrampsPerson): string {
   return (first + last).toUpperCase() || '?'
 }
 
-function PersonCard({ person }: { person: GrampsPerson }) {
+async function PersonCard({ person }: { person: GrampsPerson }) {
   const initials = getInitials(person)
   const fullName = `${person.primary_name.first_name || ''} ${person.primary_name.surname_list?.[0]?.surname || ''}`.trim()
+
+  // Get birth and death years for family members
+  const birthYear = await getPersonBirthYear(person)
+  const deathYear = await getPersonDeathYear(person)
+  const lifeDates = birthYear && deathYear
+    ? `${birthYear}–${deathYear}`
+    : birthYear
+    ? `b. ${birthYear}`
+    : deathYear
+    ? `d. ${deathYear}`
+    : ''
 
   return (
     <Link
@@ -28,7 +39,10 @@ function PersonCard({ person }: { person: GrampsPerson }) {
           <span className="text-[13px] font-medium text-gray-900 truncate block">
             {fullName}
           </span>
-          <span className="text-[10px] text-gray-500 font-mono">{person.gramps_id}</span>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-gray-500 font-mono">{person.gramps_id}</span>
+            {lifeDates && <span className="text-[10px] text-gray-500">{lifeDates}</span>}
+          </div>
         </div>
       </div>
     </Link>
@@ -62,6 +76,13 @@ export default async function PersonPage({ params }: PageProps) {
   // Get birth/death years
   const birthYear = await getPersonBirthYear(person)
   const deathYear = await getPersonDeathYear(person)
+
+  // Get birth/death events with dates and places
+  const birthEventData = await getPersonBirthEvent(person)
+  const deathEventData = await getPersonDeathEvent(person)
+
+  // Get all life events
+  const allEvents = await getPersonEvents(person)
 
   // Optional: Check Supabase for supplementary data (confidence, brick_wall, mysteries)
   const supabase = createServerSupabaseClient()
@@ -140,6 +161,44 @@ export default async function PersonPage({ params }: PageProps) {
           </a>
         </div>
 
+        {/* Facts Card */}
+        {(birthEventData || deathEventData) && (
+          <div className="bg-[#FDFCFA] border border-[#D3D1C7] rounded-lg p-4 mb-4">
+            <h2 className="text-[15px] font-semibold mb-3">Facts</h2>
+            <div className="space-y-2">
+              {birthEventData && (
+                <div className="flex items-start gap-2">
+                  <span className="text-[11px] font-medium text-gray-500 uppercase tracking-wider w-16 flex-shrink-0">Birth</span>
+                  <div className="flex-1">
+                    {birthEventData.event.date?.dateval && (
+                      <div className="text-[13px] text-gray-900">{formatEventDate(birthEventData.event.date.dateval)}</div>
+                    )}
+                    {birthEventData.place && (
+                      <div className="text-[12px] text-gray-600">{birthEventData.place.name?.value || birthEventData.place.title}</div>
+                    )}
+                  </div>
+                </div>
+              )}
+              {deathEventData && (
+                <div className="flex items-start gap-2">
+                  <span className="text-[11px] font-medium text-gray-500 uppercase tracking-wider w-16 flex-shrink-0">Death</span>
+                  <div className="flex-1">
+                    {deathEventData.event.date?.dateval && (
+                      <div className="text-[13px] text-gray-900">{formatEventDate(deathEventData.event.date.dateval)}</div>
+                    )}
+                    {deathEventData.place && (
+                      <div className="text-[12px] text-gray-600">{deathEventData.place.name?.value || deathEventData.place.title}</div>
+                    )}
+                  </div>
+                </div>
+              )}
+              {!deathEventData && birthYear && !deathYear && (
+                <div className="text-[11px] text-gray-500 italic">Living or death date unknown</div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Family Card */}
         <div className="bg-[#FDFCFA] border border-[#D3D1C7] rounded-lg p-4 mb-4">
           <h2 className="text-[15px] font-semibold mb-3">Family</h2>
@@ -207,6 +266,33 @@ export default async function PersonPage({ params }: PageProps) {
             </div>
           )}
         </div>
+
+        {/* Life Events */}
+        {allEvents.length > 0 && (
+          <div className="bg-[#FDFCFA] border border-[#D3D1C7] rounded-lg p-4 mb-4">
+            <h2 className="text-[15px] font-semibold mb-3">Life Events</h2>
+            <div className="space-y-3">
+              {allEvents.map((eventData, idx) => {
+                const eventType = eventData.event.type?.string || 'Event'
+                const date = formatEventDate(eventData.event.date?.dateval)
+                const placeName = eventData.place?.name?.value || eventData.place?.title || ''
+                const description = eventData.event.description || ''
+
+                return (
+                  <div key={idx} className="border-l-2 border-[#EF9F27] pl-3">
+                    <div className="text-[13px] font-medium text-gray-900">{eventType}</div>
+                    {date && <div className="text-[12px] text-gray-600">{date}</div>}
+                    {placeName && <div className="text-[11px] text-gray-500">{placeName}</div>}
+                    {description && <div className="text-[11px] text-gray-600 italic mt-1">{description}</div>}
+                    {eventData.role && eventData.role !== 'Primary' && (
+                      <div className="text-[10px] text-gray-400 mt-1">Role: {eventData.role}</div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Connected Mysteries */}
         {mysteries.length > 0 && (

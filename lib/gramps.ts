@@ -539,3 +539,124 @@ export async function getPersonDeathYear(person: GrampsPerson): Promise<number |
 
   return null
 }
+
+/**
+ * Get place by handle
+ */
+export async function getPlace(handle: string): Promise<any> {
+  try {
+    return await grampsRequest<any>(`/places/${handle}`)
+  } catch (error) {
+    console.error(`Error fetching place ${handle}:`, error)
+    return null
+  }
+}
+
+/**
+ * Format Gramps dateval array to readable string
+ * Dateval format: [month, day, year, boolean] or [month, day, year]
+ * Month is 0-based (0 = unknown, 1 = Jan, 2 = Feb, etc.)
+ */
+export function formatEventDate(dateval: any[] | undefined): string {
+  if (!dateval || !Array.isArray(dateval) || dateval.length < 3) {
+    return ''
+  }
+
+  const [month, day, year] = dateval
+  if (!year) return ''
+
+  const monthNames = ['', 'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+
+  if (month > 0 && day > 0) {
+    return `${monthNames[month]} ${day}, ${year}`
+  } else if (month > 0) {
+    return `${monthNames[month]} ${year}`
+  } else {
+    return `${year}`
+  }
+}
+
+/**
+ * Get person's birth event with full date and place
+ */
+export async function getPersonBirthEvent(person: GrampsPerson): Promise<{ event: GrampsEvent; place: any } | null> {
+  if (!person.event_ref_list || person.event_ref_list.length === 0) {
+    return null
+  }
+
+  try {
+    for (const eventRef of person.event_ref_list) {
+      const event = await getEvent(eventRef.ref)
+      if (event.type.string.toLowerCase().includes('birth')) {
+        let place = null
+        if (event.place) {
+          place = await getPlace(event.place)
+        }
+        return { event, place }
+      }
+    }
+  } catch (error) {
+    console.error('Error fetching birth event:', error)
+  }
+
+  return null
+}
+
+/**
+ * Get person's death event with full date and place
+ */
+export async function getPersonDeathEvent(person: GrampsPerson): Promise<{ event: GrampsEvent; place: any } | null> {
+  if (!person.event_ref_list || person.event_ref_list.length === 0) {
+    return null
+  }
+
+  try {
+    for (const eventRef of person.event_ref_list) {
+      const event = await getEvent(eventRef.ref)
+      if (event.type.string.toLowerCase().includes('death')) {
+        let place = null
+        if (event.place) {
+          place = await getPlace(event.place)
+        }
+        return { event, place }
+      }
+    }
+  } catch (error) {
+    console.error('Error fetching death event:', error)
+  }
+
+  return null
+}
+
+/**
+ * Get all events for a person with places
+ */
+export async function getPersonEvents(person: GrampsPerson): Promise<Array<{ event: GrampsEvent; place: any; role: string }>> {
+  if (!person.event_ref_list || person.event_ref_list.length === 0) {
+    return []
+  }
+
+  const events: Array<{ event: GrampsEvent; place: any; role: string }> = []
+
+  try {
+    for (const eventRef of person.event_ref_list) {
+      const event = await getEvent(eventRef.ref)
+      let place = null
+      if (event.place) {
+        place = await getPlace(event.place)
+      }
+      events.push({ event, place, role: eventRef.role || 'Primary' })
+    }
+
+    // Sort chronologically by date
+    events.sort((a, b) => {
+      const yearA = a.event.date?.dateval?.[2] || 0
+      const yearB = b.event.date?.dateval?.[2] || 0
+      return yearA - yearB
+    })
+  } catch (error) {
+    console.error('Error fetching person events:', error)
+  }
+
+  return events
+}
