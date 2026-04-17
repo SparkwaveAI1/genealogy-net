@@ -162,39 +162,62 @@ export default async function PersonPage({ params }: PageProps) {
         </div>
 
         {/* Facts Card */}
-        {(birthEventData || deathEventData) && (
+        {(birthEventData || deathEventData || birthYear || deathYear) && (
           <div className="bg-[#FDFCFA] border border-[#D3D1C7] rounded-lg p-4 mb-4">
             <h2 className="text-[15px] font-semibold mb-3">Facts</h2>
-            <div className="space-y-2">
-              {birthEventData && (
-                <div className="flex items-start gap-2">
-                  <span className="text-[11px] font-medium text-gray-500 uppercase tracking-wider w-16 flex-shrink-0">Birth</span>
+            <div className="space-y-3">
+              {/* Birth */}
+              {(birthEventData || birthYear) && (
+                <div className="flex items-start gap-3">
+                  <span className="text-[11px] font-semibold text-gray-600 uppercase tracking-wider w-14 flex-shrink-0 pt-0.5">Born</span>
                   <div className="flex-1">
-                    {birthEventData.event.date?.dateval && (
-                      <div className="text-[13px] text-gray-900">{formatEventDate(birthEventData.event.date.dateval)}</div>
+                    {birthEventData?.event.date?.dateval ? (
+                      <div className="text-[13px] text-gray-900 font-medium">{formatEventDate(birthEventData.event.date.dateval)}</div>
+                    ) : birthYear ? (
+                      <div className="text-[13px] text-gray-900 font-medium">{birthYear}</div>
+                    ) : null}
+                    {birthEventData?.place && (
+                      <div className="text-[12px] text-gray-600 mt-0.5">
+                        in {birthEventData.place.name?.value || birthEventData.place.title}
+                      </div>
                     )}
-                    {birthEventData.place && (
-                      <div className="text-[12px] text-gray-600">{birthEventData.place.name?.value || birthEventData.place.title}</div>
+                    {birthEventData && (
+                      <span className="inline-block mt-1 px-2 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-700">
+                        confirmed
+                      </span>
                     )}
                   </div>
                 </div>
               )}
-              {deathEventData && (
-                <div className="flex items-start gap-2">
-                  <span className="text-[11px] font-medium text-gray-500 uppercase tracking-wider w-16 flex-shrink-0">Death</span>
+
+              {/* Death */}
+              {deathEventData ? (
+                <div className="flex items-start gap-3">
+                  <span className="text-[11px] font-semibold text-gray-600 uppercase tracking-wider w-14 flex-shrink-0 pt-0.5">Died</span>
                   <div className="flex-1">
                     {deathEventData.event.date?.dateval && (
-                      <div className="text-[13px] text-gray-900">{formatEventDate(deathEventData.event.date.dateval)}</div>
+                      <div className="text-[13px] text-gray-900 font-medium">{formatEventDate(deathEventData.event.date.dateval)}</div>
                     )}
                     {deathEventData.place && (
-                      <div className="text-[12px] text-gray-600">{deathEventData.place.name?.value || deathEventData.place.title}</div>
+                      <div className="text-[12px] text-gray-600 mt-0.5">
+                        in {deathEventData.place.name?.value || deathEventData.place.title}
+                      </div>
                     )}
+                    <span className="inline-block mt-1 px-2 py-0.5 rounded text-[10px] font-medium bg-green-100 text-green-700">
+                      confirmed
+                    </span>
                   </div>
                 </div>
-              )}
-              {!deathEventData && birthYear && !deathYear && (
-                <div className="text-[11px] text-gray-500 italic">Living or death date unknown</div>
-              )}
+              ) : deathYear ? (
+                <div className="flex items-start gap-3">
+                  <span className="text-[11px] font-semibold text-gray-600 uppercase tracking-wider w-14 flex-shrink-0 pt-0.5">Died</span>
+                  <div className="flex-1">
+                    <div className="text-[13px] text-gray-900 font-medium">{deathYear}</div>
+                  </div>
+                </div>
+              ) : birthYear && !deathYear ? (
+                <div className="text-[11px] text-gray-500 italic">Death date unknown</div>
+              ) : null}
             </div>
           </div>
         )}
