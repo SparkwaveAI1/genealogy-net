@@ -273,7 +273,11 @@ export default async function PersonPage({ params }: PageProps) {
             <h2 className="text-[15px] font-semibold mb-3">Life Events</h2>
             <div className="space-y-3">
               {allEvents.map((eventData, idx) => {
-                const eventType = eventData.event.type?.string || 'Event'
+                // Handle both string and object event types
+                const rawType = eventData.event.type
+                const eventType = typeof rawType === 'string'
+                  ? rawType
+                  : (rawType?.string || 'Event')
                 const date = formatEventDate(eventData.event.date?.dateval)
                 const placeName = eventData.place?.name?.value || eventData.place?.title || ''
                 const description = eventData.event.description || ''
