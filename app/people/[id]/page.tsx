@@ -321,35 +321,6 @@ export default async function PersonPage({ params }: PageProps) {
           </div>
         )}
 
-        {/* Connected Mysteries */}
-        {mysteries.length > 0 && (
-          <div className="bg-[#FDFCFA] border border-[#D3D1C7] rounded-lg p-4 mb-4">
-            <h2 className="text-[15px] font-semibold mb-3">Connected Mysteries</h2>
-            <div className="space-y-2">
-              {mysteries.map(mystery => (
-                <Link
-                  key={mystery.id}
-                  href={`/mysteries/${mystery.id}`}
-                  className="block p-3 bg-[#FAEEDA] border border-[#EF9F27] rounded hover:bg-[#EF9F27]/20 transition-colors"
-                >
-                  <div className="text-[13px] font-medium text-gray-900">{mystery.title}</div>
-                  {mystery.core_question && (
-                    <div className="text-[11px] text-gray-600 mt-1">{mystery.core_question}</div>
-                  )}
-                </Link>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Research Notes */}
-        {supabaseData?.bio && (
-          <div className="bg-[#FDFCFA] border border-[#D3D1C7] rounded-lg p-4 mb-4">
-            <h2 className="text-[15px] font-semibold mb-3">Research Notes</h2>
-            <div className="text-[13px] text-gray-700 whitespace-pre-wrap">{supabaseData.bio}</div>
-          </div>
-        )}
-
         {/* Open Questions */}
         {supabaseData?.needs_review && (
           <div className="bg-[#FDFCFA] border-l-2 border-[#EF9F27] rounded-lg p-4">
@@ -409,6 +380,39 @@ export default async function PersonPage({ params }: PageProps) {
             personId={person.gramps_id}
             personName={`${person.primary_name.first_name || ''} ${person.primary_name.surname_list?.[0]?.surname || ''}`.trim()}
           />
+
+          {/* Connected Mysteries */}
+          {mysteries.length > 0 && (
+            <div className="bg-[#FDFCFA] border border-[#D3D1C7] rounded-lg p-3">
+              <h3 className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-2">
+                Connected Mysteries
+              </h3>
+              <div className="space-y-2">
+                {mysteries.map(mystery => (
+                  <Link
+                    key={mystery.id}
+                    href={`/mysteries/${mystery.id}`}
+                    className="block p-2 bg-[#FAEEDA] border border-[#EF9F27] rounded hover:bg-[#EF9F27]/20 transition-colors"
+                  >
+                    <div className="text-[11px] font-medium text-gray-900 leading-tight">{mystery.title}</div>
+                    {mystery.core_question && (
+                      <div className="text-[10px] text-gray-600 mt-1 leading-tight">{mystery.core_question}</div>
+                    )}
+                  </Link>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Research Notes */}
+          {supabaseData?.bio && (
+            <div className="bg-[#FDFCFA] border border-[#D3D1C7] rounded-lg p-3">
+              <h3 className="text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-2">
+                Research Notes
+              </h3>
+              <div className="text-[11px] text-gray-700 whitespace-pre-wrap leading-relaxed">{supabaseData.bio}</div>
+            </div>
+          )}
         </div>
       </div>
     </div>
