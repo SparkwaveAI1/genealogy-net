@@ -590,7 +590,8 @@ export async function getPersonBirthEvent(person: GrampsPerson): Promise<{ event
       if (event.type.string.toLowerCase().includes('birth')) {
         let place = null
         if (event.place) {
-          place = await getPlace(event.place)
+          const placeHandle = typeof event.place === 'string' ? event.place : (event.place as any).ref || event.place
+          place = await getPlace(placeHandle)
         }
         return { event, place }
       }
@@ -616,7 +617,8 @@ export async function getPersonDeathEvent(person: GrampsPerson): Promise<{ event
       if (event.type.string.toLowerCase().includes('death')) {
         let place = null
         if (event.place) {
-          place = await getPlace(event.place)
+          const placeHandle = typeof event.place === 'string' ? event.place : (event.place as any).ref || event.place
+          place = await getPlace(placeHandle)
         }
         return { event, place }
       }
@@ -643,7 +645,8 @@ export async function getPersonEvents(person: GrampsPerson): Promise<Array<{ eve
       const event = await getEvent(eventRef.ref)
       let place = null
       if (event.place) {
-        place = await getPlace(event.place)
+        const placeHandle = typeof event.place === 'string' ? event.place : (event.place as any).ref || event.place
+        place = await getPlace(placeHandle)
       }
       events.push({ event, place, role: eventRef.role || 'Primary' })
     }
