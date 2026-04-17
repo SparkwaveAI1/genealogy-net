@@ -12,7 +12,25 @@ function slugify(name: string): string {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
-// Gramps actions — these already work over HTTP
+// ARCHITECTURE NOTES:
+//
+// 1. DOCUMENT STORAGE (Supabase only):
+//    - documents table: metadata
+//    - document_people table: links documents to people
+//    - mystery_evidence table: links documents to mysteries
+//    - wiki_pages table: analysis results
+//    - citations table: evidence citations
+//    These are all Supabase-only and do NOT touch Gramps.
+//
+// 2. FACT UPDATES (Gramps only, optional):
+//    - update_gramps: pushes confirmed facts (birth date, death date, etc.)
+//      back to the Gramps tree
+//    - This is SEPARATE from document storage
+//    - Requires person.handle for Gramps API calls
+// ──────────────────────────────────────────────────────────────────────────
+
+// ──────────────────────────────────────────────────────────────────────────
+// Gramps actions — update genealogy tree with confirmed facts
 // ──────────────────────────────────────────────────────────────────────────
 
 /**
@@ -118,6 +136,11 @@ async function upsertPersonEvent(
   }
 }
 
+/**
+ * Update Gramps tree with confirmed facts from document analysis.
+ * This ONLY updates the Gramps database, NOT Supabase.
+ * Use link_document_person to save document-person relationships to Supabase.
+ */
 async function executeUpdateGramps(payload: {
   action_id?: string
   action_type?: string
@@ -137,8 +160,9 @@ async function executeUpdateGramps(payload: {
 
     const changes = payload.changes || {}
 
-    // Fetch current person to get their handle (Gramps API needs handle, not gramps_id for PUT)
-    const current = await getPerson(gramps_id)
+    // Fetch current person object with handle
+    // IMPORTANT: Gramps API requires person.handle for all PUT operations
+    const person = await getPerson(gramps_id)
 
     // Build structured update — convert AI-friendly fields to Gramps API format
     const updateData: Record<string, any> = {}
@@ -147,17 +171,17 @@ async function executeUpdateGramps(payload: {
     if (changes.birth_date) {
       // Gramps stores dates on events, not directly on the person
       // We need to find or create a Birth event and link it
-      await upsertPersonEvent(current, 'Birth', changes.birth_date, payload.document_id)
+      await upsertPersonEvent(person, 'Birth', changes.birth_date, payload.document_id)
     }
 
     // Handle death_date → create or update Death event
     if (changes.death_date) {
-      await upsertPersonEvent(current, 'Death', changes.death_date, payload.document_id)
+      await upsertPersonEvent(person, 'Death', changes.death_date, payload.document_id)
     }
 
     // Handle name changes
     if (changes.first_name || changes.surname) {
-      const primaryName = { ...current.primary_name }
+      const primaryName = { ...person.primary_name }
       if (changes.first_name) primaryName.first_name = changes.first_name
       if (changes.surname) {
         primaryName.surname_list = [{ surname: changes.surname }]
@@ -168,15 +192,21 @@ async function executeUpdateGramps(payload: {
     // Handle gender
     if (changes.gender) {
       const genderMap: Record<string, number> = { male: 1, female: 2, unknown: 0 }
-      updateData.gender = genderMap[changes.gender.toLowerCase()] ?? (current as any).gender
+      updateData.gender = genderMap[changes.gender.toLowerCase()] ?? (person as any).gender
     }
 
-    // Only update person record if we have direct field changes
+    // Only update person record if we have direct field changes (name, gender, etc.)
+    // Note: Date changes are handled via events above
     if (Object.keys(updateData).length > 0) {
-      await updatePerson(gramps_id, { ...current, ...updateData })
+      // Use person.handle for PUT request
+      const merged = { ...person, ...updateData }
+      await grampsRequest(`/people/${person.handle}`, {
+        method: 'PUT',
+        body: JSON.stringify(merged),
+      })
     }
 
-    // Add citation
+    // Add citation to Supabase (this links the document evidence to the person)
     if (payload.document_id) {
       try {
         await supabaseService.from('citations').insert({
@@ -341,9 +371,46 @@ async function executeUpdateWiki(payload: {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
-// Mystery linking — already works (Supabase only)
+// Supabase-only actions — document linking (no Gramps involvement)
 // ──────────────────────────────────────────────────────────────────────────
 
+/**
+ * Link a document to a person in Supabase.
+ * This creates a document_people record for research tracking.
+ * This does NOT update Gramps. Use update_gramps to push facts to the tree.
+ */
+async function executeLinkDocumentPerson(payload: {
+  document_id: string
+  gramps_ids: string[]
+}): Promise<{ success: boolean; error?: string }> {
+  try {
+    if (!payload.gramps_ids || payload.gramps_ids.length === 0) {
+      return { success: false, error: 'No gramps_ids provided' }
+    }
+
+    // Create document_people records for each person
+    const records = payload.gramps_ids.map(gramps_id => ({
+      document_id: payload.document_id,
+      person_id: gramps_id,
+      role: 'subject',
+    }))
+
+    const { error } = await supabaseService
+      .from('document_people')
+      .insert(records)
+
+    if (error) return { success: false, error: error.message }
+    return { success: true }
+  } catch (error: any) {
+    return { success: false, error: error.message }
+  }
+}
+
+/**
+ * Link a document to a mystery in Supabase.
+ * This creates a mystery_evidence record for research tracking.
+ * This does NOT update Gramps.
+ */
 async function executeLinkMystery(payload: {
   document_id: string
   mystery_id: string
@@ -383,15 +450,23 @@ export async function POST(req: NextRequest) {
 
     switch (action_type) {
       case 'update_gramps':
+        // Update Gramps tree with confirmed facts (birth date, death date, etc.)
         result = await executeUpdateGramps(payload)
         break
       case 'create_gramps':
+        // Create a new person in Gramps tree
         result = await executeCreateGramps(payload)
         break
       case 'update_wiki':
+        // Save analysis results to wiki_pages table in Supabase
         result = await executeUpdateWiki(payload)
         break
+      case 'link_document_person':
+        // Link document to people in Supabase (document_people table)
+        result = await executeLinkDocumentPerson(payload)
+        break
       case 'link_mystery':
+        // Link document to mystery in Supabase (mystery_evidence table)
         result = await executeLinkMystery(payload)
         break
       default:
