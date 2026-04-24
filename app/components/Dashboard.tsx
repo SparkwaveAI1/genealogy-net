@@ -174,31 +174,43 @@ export default function Dashboard() {
   }
 
   const loadMysteries = async () => {
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 10000)
     try {
-      const response = await fetch('/api/mysteries')
+      const response = await fetch('/api/mysteries', { signal: controller.signal })
+      clearTimeout(timeoutId)
       const data = await response.json()
       setMysteries(data.mysteries || [])
     } catch (error) {
+      clearTimeout(timeoutId)
       console.error('Error loading mysteries:', error)
     }
   }
 
   const loadNeedsAttention = async () => {
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 25000)
     try {
-      const response = await fetch('/api/needs-attention')
+      const response = await fetch('/api/needs-attention', { signal: controller.signal })
+      clearTimeout(timeoutId)
       const data = await response.json()
       setNeedsAttention(data.people || [])
     } catch (error) {
+      clearTimeout(timeoutId)
       console.error('Error loading needs attention:', error)
     }
   }
 
   const loadWikiActivity = async () => {
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 8000)
     try {
-      const response = await fetch('/api/wiki-sync')
+      const response = await fetch('/api/wiki-sync', { signal: controller.signal })
+      clearTimeout(timeoutId)
       const data = await response.json()
       setWikiActivity(data.entries || [])
     } catch (error) {
+      clearTimeout(timeoutId)
       console.error('Error loading wiki activity:', error)
     }
   }
