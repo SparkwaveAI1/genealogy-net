@@ -75,29 +75,43 @@ export async function getToken(): Promise<string> {
 /**
  * Make authenticated request to Gramps API
  */
-export async function grampsRequest<T>(endpoint: string, options?: RequestInit): Promise<T> {
+export async function grampsRequest<T>(endpoint: string, options?: RequestInit & { timeoutMs?: number }): Promise<T> {
+  const timeoutMs = options?.timeoutMs ?? 30000
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
+
   const token = await getToken()
   const url = `${GRAMPS_API_URL}${endpoint}`
   console.log('grampsRequest URL:', url)
 
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      ...options?.headers,
-    },
-  })
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        ...options?.headers,
+      },
+    })
+    clearTimeout(timeout)
 
-  console.log('grampsRequest response status:', response.status, response.statusText)
+    console.log('grampsRequest response status:', response.status, response.statusText)
 
-  if (!response.ok) {
-    const errorText = await response.text()
-    console.error('Gramps API error:', response.status, errorText)
-    throw new Error(`Gramps API error: ${response.status} ${errorText}`)
+    if (!response.ok) {
+      const errorText = await response.text()
+      console.error('Gramps API error:', response.status, errorText)
+      throw new Error(`Gramps API error: ${response.status} ${errorText}`)
+    }
+
+    return response.json()
+  } catch (error: any) {
+    clearTimeout(timeout)
+    if (error.name === 'AbortError') {
+      throw new Error(`Gramps API timeout after ${timeoutMs}ms: ${endpoint}`)
+    }
+    throw error
   }
-
-  return response.json()
 }
 
 /**

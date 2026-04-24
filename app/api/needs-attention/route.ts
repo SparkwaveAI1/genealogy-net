@@ -3,13 +3,12 @@ import { grampsRequest, getEvent, extractEventType } from '@/lib/gramps'
 import { GrampsPerson } from '@/lib/types'
 
 export async function GET() {
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 20000)
   try {
     // Fetch people with event_ref_list so we can check for missing birth/death
+    // Use 25s timeout (grampsRequest default is 30s)
     const people: GrampsPerson[] = await grampsRequest(
       '/people/?keys=handle,gramps_id,primary_name,event_ref_list,parent_family_list',
-      { signal: controller.signal }
+      { timeoutMs: 25000 }
     )
 
     // Check up to 50 people in parallel for date completeness
@@ -99,11 +98,9 @@ export async function GET() {
       }
     })
 
-    clearTimeout(timeout)
     return NextResponse.json({ people: formatted })
   } catch (error: any) {
-    clearTimeout(timeout)
-    if (error.name === 'AbortError' || error.name === 'TypeError') {
+    if (error.message?.includes('timeout')) {
       console.warn('needs-attention API timed out, returning empty')
       return NextResponse.json({ people: [] })
     }
