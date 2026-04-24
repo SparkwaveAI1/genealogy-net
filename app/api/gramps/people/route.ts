@@ -10,7 +10,7 @@ export async function GET(request: Request) {
 
     const people = withDates
       ? await getPeopleWithDates(query || undefined, limit)
-      : await getPeople(query || undefined)
+      : await getPeople(query || undefined, { timeoutMs: 25000 })
 
     return NextResponse.json(people)
   } catch (error) {

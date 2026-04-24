@@ -132,15 +132,15 @@ function transformSearchResult(r: any): GrampsPerson {
  * Uses /search/?query= for searches (q= param is invalid on /people/).
  * Uses /people/?keys= for non-search (returns all people).
  */
-export async function getPeople(search?: string): Promise<GrampsPerson[]> {
+export async function getPeople(search?: string, options?: { timeoutMs?: number }): Promise<GrampsPerson[]> {
   if (search) {
     // /search/ returns {handle, object:{...}} — transform to GrampsPerson[]
-    const results = await grampsRequest<any[]>(`/search/?query=${encodeURIComponent(search)}`)
+    const results = await grampsRequest<any[]>(`/search/?query=${encodeURIComponent(search)}`, options)
     return results.map(transformSearchResult)
   }
   // /people/ returns plain GrampsPerson[]
   const keys = 'handle,gramps_id,primary_name'
-  return grampsRequest<GrampsPerson[]>(`/people/?keys=${keys}`)
+  return grampsRequest<GrampsPerson[]>(`/people/?keys=${keys}`, options)
 }
 
 /**
