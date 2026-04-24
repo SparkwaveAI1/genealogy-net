@@ -78,6 +78,10 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Wrap entire handler in 30s timeout to prevent serverless hanging on AI API delays
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+
   try {
     const contentType = req.headers.get('content-type') || '';
 
@@ -86,13 +90,23 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json();
-    return handleJsonChat(body);
+    return await handleJsonChat(body);
   } catch (error: any) {
+    clearTimeout(timeout);
+    if (error.name === 'AbortError') {
+      console.error('Chat API timeout after 30s');
+      return NextResponse.json(
+        { error: 'Request timed out. The AI service took too long to respond. Please try again.' },
+        { status: 504 }
+      );
+    }
     console.error('Chat API error:', error);
     return NextResponse.json(
       { error: error.message || 'An error occurred' },
       { status: 500 }
     );
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
