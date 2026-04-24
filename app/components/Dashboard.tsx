@@ -138,6 +138,8 @@ export default function Dashboard() {
 
   const loadBriefing = async () => {
     setIsLoading(true)
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 15000)
     try {
       const response = await fetch('/api/chat', {
         method: 'POST',
@@ -149,8 +151,10 @@ export default function Dashboard() {
           }],
           mode: 'briefing',
           model: selectedModel,
-        })
+        }),
+        signal: controller.signal,
       })
+      clearTimeout(timeoutId)
 
       const data = await response.json()
       if (data.message) {
@@ -209,13 +213,17 @@ export default function Dashboard() {
     const newUserMsg = { role: 'user' as const, content: userMessage }
     setMessages(prev => [...prev, newUserMsg])
 
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 30000)
     try {
       const allMessages = [...messages, newUserMsg]
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ messages: allMessages, model: selectedModel }),
+        signal: controller.signal,
       })
+      clearTimeout(timeoutId)
       const data = await response.json()
       if (data.message) {
         setMessages(prev => [...prev, { role: 'assistant', content: data.message, provider: data.provider }])
