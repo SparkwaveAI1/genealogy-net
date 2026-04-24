@@ -32,7 +32,9 @@ interface Person {
   id: string
   given_name: string
   surname: string
-  confidence?: string
+  birth_year?: number | null
+  death_year?: number | null
+  status?: string
 }
 
 export default function Dashboard() {
@@ -411,8 +413,11 @@ export default function Dashboard() {
                     <div className="text-[11px] font-medium">
                       {person.given_name} {person.surname}
                     </div>
-                    {person.confidence && (
-                      <div className="text-[10px] text-gray-500 mt-0.5">{person.confidence}</div>
+                    {person.birth_year && (
+                      <div className="text-[10px] text-gray-500">{person.birth_year}–{person.death_year || '?'}</div>
+                    )}
+                    {person.status && (
+                      <div className="text-[10px] text-orange-600 mt-0.5">{person.status}</div>
                     )}
                   </Link>
                 ))}

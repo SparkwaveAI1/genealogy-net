@@ -4,21 +4,15 @@ import path from 'path'
 
 export async function GET() {
   try {
-    const logPath = path.join(process.env.HOME || '~', 'genealogy-wiki', 'wiki', 'log.md')
-
-    if (!fs.existsSync(logPath)) {
-      return NextResponse.json({ entries: [] })
-    }
-
-    const content = fs.readFileSync(logPath, 'utf-8')
-    const lines = content.split('\n').filter(line => line.trim())
-
-    // Get last 10 entries (assuming each entry is a line)
-    const entries = lines.slice(-10).reverse()
-
-    return NextResponse.json({ entries })
+    // Wiki lives on Hetzner VPS filesystem — not accessible from Vercel serverless
+    // Return a note that wiki activity will appear when Hermes writes to the wiki
+    // Future: store wiki log entries in Supabase for cross-platform access
+    return NextResponse.json({
+      entries: ['Wiki activity syncs from the VPS. Connect Supabase storage for cloud access.'],
+      note: 'wiki_on_vps',
+    })
   } catch (error) {
-    console.error('Error reading wiki log:', error)
+    console.error('Error in wiki-sync API:', error)
     return NextResponse.json({ entries: [] })
   }
 }
