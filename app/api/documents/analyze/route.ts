@@ -153,6 +153,14 @@ Analyze this document and return a structured JSON response with your findings. 
 - Note any anachronisms, obvious misreadings, or suspect transcriptions
 - If the document is a scanned image that needs visual OCR, say so in summary
 
+### Terminology Discipline — HARD CONSTRAINT
+- **"Primary Source" and "Secondary Source" are NEVER valid output terms.** These terms appear frequently in casual genealogy discussion but are GPS-incorrect. Any instance in the output is a quality failure.
+- **Source classification** (field: source_classification) must use: **Original** | **Derivative** | **Authored**
+- **Information type** (field: information_type) must use: **Primary** | **Secondary** | **Indeterminate**
+- These two fields are independent and non-interchangeable. A source can be Original (Derivative, Authored) and contain Primary (Secondary, Indeterminate) information.
+- Example of INCORRECT output: \`"source_classification": "Primary source", "information_type": "Secondary source"\`
+- Example of CORRECT output: \`"source_classification": "Original", "information_type": "Secondary"\`
+
 Return ONLY valid JSON. No preamble, no explanation.`
 }
 
@@ -346,35 +354,38 @@ export async function POST(req: NextRequest) {
 
     // ── Save analysis results back to Supabase for future chat reference ────
     // This populates raw_text so the chat route doesn't need to re-extract.
+    // Note: GPS output nests all document fields under analysis.document_analysis.
+    // Only proposed_actions and summary remain at the top level.
     try {
-      // Build a human-readable summary from the analysis for raw_text
+      const doc = analysis.document_analysis ?? {}
       const rawTextParts: string[] = []
       if (analysis.summary) rawTextParts.push(`SUMMARY: ${analysis.summary}`)
-      if (analysis.source_type) rawTextParts.push(`Source type: ${analysis.source_type}`)
-      if (analysis.information_type) rawTextParts.push(`Information type: ${analysis.information_type}`)
-      if (analysis.scenario) rawTextParts.push(`Scenario: ${analysis.scenario}`)
-      if (analysis.direct_evidence?.length) {
+      if (doc.source_classification) rawTextParts.push(`Source type: ${doc.source_classification}`)
+      if (doc.information_type) rawTextParts.push(`Information type: ${doc.information_type}`)
+      if (doc.scenario) rawTextParts.push(`Scenario: ${doc.scenario}`)
+      if (doc.record_type) rawTextParts.push(`Record type: ${doc.record_type}`)
+      if (doc.direct_evidence?.length) {
         rawTextParts.push('\nDIRECT EVIDENCE:')
-        for (const e of analysis.direct_evidence) {
-          rawTextParts.push(`- ${e.fact || e.claim}: ${e.quote || ''} [${e.confidence || '?'}]`)
+        for (const e of doc.direct_evidence) {
+          rawTextParts.push(`- ${e.fact}: ${e.quote || ''} [${e.confidence || '?'}]`)
         }
       }
-      if (analysis.indirect_evidence?.length) {
+      if (doc.indirect_evidence?.length) {
         rawTextParts.push('\nINDIRECT EVIDENCE:')
-        for (const e of analysis.indirect_evidence) {
-          rawTextParts.push(`- ${e.fact || e.claim}: ${e.reasoning || e.quote || ''} [${e.confidence || '?'}]`)
+        for (const e of doc.indirect_evidence) {
+          rawTextParts.push(`- ${e.inference}: ${e.supporting_detail || ''} [${e.confidence || '?'}]`)
         }
       }
-      if (analysis.fan_clues?.length) {
+      if (doc.fan_clues?.length) {
         rawTextParts.push('\nFAN CLUES:')
-        for (const f of analysis.fan_clues) {
-          rawTextParts.push(`- ${f.name || f.person || '?'}: ${f.relationship || f.role || ''} — ${f.notes || f.detail || ''}`)
+        for (const f of doc.fan_clues) {
+          rawTextParts.push(`- ${f.name}: ${f.relationship_hint} — ${f.context}`)
         }
       }
-      if (analysis.conflicts?.length) {
+      if (doc.conflicts?.length) {
         rawTextParts.push('\nCONFLICTS:')
-        for (const c of analysis.conflicts) {
-          rawTextParts.push(`- ${c.description || c.conflict}: ${c.resolution || ''}`)
+        for (const c of doc.conflicts) {
+          rawTextParts.push(`- ${c.issue}: ${c.detail}`)
         }
       }
       if (analysis.proposed_actions?.length) {
@@ -388,14 +399,21 @@ export async function POST(req: NextRequest) {
 
       const rawText = rawTextParts.join('\n')
 
+      // Unique people with direct or indirect evidence = participant_count
+      const allSubjects = [
+        ...(doc.direct_evidence || []).map((e: any) => e.subject).filter(Boolean),
+        ...(doc.indirect_evidence || []).map((e: any) => e.subject).filter(Boolean),
+      ]
+      const uniqueSubjects = new Set(allSubjects).size
+
       await supabaseService
         .from('documents')
         .update({
           raw_text: rawText,
           processing_status: 'analyzed',
           processing_completed_at: new Date().toISOString(),
-          event_count: analysis.direct_evidence?.length || 0,
-          participant_count: analysis.fan_clues?.length || 0,
+          event_count: doc.direct_evidence?.length || 0,
+          participant_count: uniqueSubjects,
         })
         .eq('id', document_id)
 

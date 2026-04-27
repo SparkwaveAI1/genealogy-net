@@ -10,6 +10,11 @@ interface GrampsPerson {
   death_year?: number | null
 }
 
+interface SelectedPersonWithNotes {
+  person: GrampsPerson
+  notes: string
+}
+
 interface ProposedAction {
   action_id: string
   action_type: string
@@ -68,15 +73,15 @@ export default function DocumentUploader({
   // ── Person search state ──────────────────────────────────────────────────
   const [personQuery, setPersonQuery] = useState('')
   const [personResults, setPersonResults] = useState<GrampsPerson[]>([])
-  const [selectedPeople, setSelectedPeople] = useState<GrampsPerson[]>([])
+  const [selectedPeople, setSelectedPeople] = useState<SelectedPersonWithNotes[]>([])
   const [searchingPerson, setSearchingPerson] = useState(false)
   const [showDropdown, setShowDropdown] = useState(false)
   const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
 
   function addPerson(person: GrampsPerson) {
-    if (!selectedPeople.some(p => p.gramps_id === person.gramps_id)) {
-      setSelectedPeople(prev => [...prev, person])
+    if (!selectedPeople.some(p => p.person.gramps_id === person.gramps_id)) {
+      setSelectedPeople(prev => [...prev, { person, notes: '' }])
     }
     setPersonQuery('')
     setPersonResults([])
@@ -84,7 +89,13 @@ export default function DocumentUploader({
   }
 
   function removePerson(grampsId: string) {
-    setSelectedPeople(prev => prev.filter(p => p.gramps_id !== grampsId))
+    setSelectedPeople(prev => prev.filter(p => p.person.gramps_id !== grampsId))
+  }
+
+  function updatePersonNotes(grampsId: string, notes: string) {
+    setSelectedPeople(prev => prev.map(p => 
+      p.person.gramps_id === grampsId ? { ...p, notes } : p
+    ))
   }
 
   // ── GPS Analysis state ───────────────────────────────────────────────────
@@ -176,16 +187,29 @@ export default function DocumentUploader({
     setUploading(true)
     setSaveError(null)
 
-    const effectiveContextId = contextType === 'dashboard' ? selectedPerson?.gramps_id : contextId
-    const effectiveContextName = contextType === 'dashboard' ? selectedPerson?.name : contextName
-
     try {
       const fd = new FormData()
       fd.append('file', file)
-      fd.append('context_type', contextType === 'dashboard' ? 'person' : contextType)
-      fd.append('context_id', effectiveContextId || '')
-      fd.append('context_name', effectiveContextName || '')
       fd.append('document_type', documentType)
+
+      // Pass all selected people with their notes
+      if (selectedPeople.length > 0) {
+        fd.append('people_links', JSON.stringify(selectedPeople.map(sp => ({
+          person_id: sp.person.gramps_id,
+          notes: sp.notes
+        }))))
+        // Don't send context_type/context_id when people_links is provided (route handles both)
+      } else {
+        if (contextType === 'person' && contextId) {
+          fd.append('context_type', contextType)
+          fd.append('context_id', contextId)
+          fd.append('context_name', contextName)
+        } else if (contextType === 'mystery' && contextId) {
+          fd.append('context_type', contextType)
+          fd.append('context_id', contextId)
+          fd.append('context_name', contextName)
+        }
+      }
 
       const res = await fetch('/api/documents/save', { method: 'POST', body: fd })
       const data = await res.json()
@@ -218,10 +242,8 @@ export default function DocumentUploader({
     setSelectedActions(new Set())
     setExecutionResults({})
 
-    const selectedPerson = selectedPeople[0] ?? null
-    const effectiveContextId = contextType === 'dashboard' ? selectedPerson?.gramps_id : contextId
-    const effectiveContextName = contextType === 'dashboard' ? selectedPerson?.name : contextName
-    const allPeopleNames = selectedPeople.map(p => p.name).join(', ')
+    const effectiveContextId = contextType === 'dashboard' ? selectedPeople[0]?.person.gramps_id : contextId
+    const effectiveContextName = contextType === 'dashboard' ? selectedPeople.map(p => p.person.name).join(', ') : contextName
 
     try {
       const res = await fetch('/api/documents/analyze', {
@@ -268,10 +290,8 @@ export default function DocumentUploader({
     if (actionsToRun.length === 0) return
 
     setExecuting(true)
-    const selectedPerson = selectedPeople[0] ?? null
-    const effectiveContextId = contextType === 'dashboard' ? selectedPerson?.gramps_id : contextId
-    const effectiveContextName = contextType === 'dashboard' ? selectedPerson?.name : contextName
-    const allPeopleNames = selectedPeople.map(p => p.name).join(', ')
+    const effectiveContextId = contextType === 'dashboard' ? selectedPeople[0]?.person.gramps_id : contextId
+    const effectiveContextName = contextType === 'dashboard' ? selectedPeople.map(p => p.person.name).join(', ') : contextName
 
     const results: Record<string, { success: boolean; message: string }> = {}
 
@@ -283,7 +303,7 @@ export default function DocumentUploader({
         }
         if (action.action_type === 'update_gramps' || action.action_type === 'create_gramps') {
           payload.linked_person = effectiveContextId
-            ? { gramps_id: effectiveContextId, name: allPeopleNames || effectiveContextName }
+            ? { gramps_id: effectiveContextId, name: effectiveContextName }
             : null
         }
 
@@ -347,9 +367,6 @@ export default function DocumentUploader({
   }
 
   // ── Derived state ─────────────────────────────────────────────────────────
-  const selectedPerson = selectedPeople[0] ?? null
-  const effectiveContextId = contextType === 'dashboard' ? selectedPerson?.gramps_id : contextId
-  const effectiveContextName = contextType === 'dashboard' ? selectedPerson?.name : contextName
   const hasDocument = !!savedDocId
   const hasAnalysis = !!analysisResult
   const hasResults = Object.keys(executionResults).length > 0
@@ -367,27 +384,35 @@ export default function DocumentUploader({
             Link to Person
           </label>
 
-          {/* Selected people chips */}
+          {/* Selected people chips with notes */}
           {selectedPeople.length > 0 && (
-            <div className="flex flex-wrap gap-2 mb-2">
-              {selectedPeople.map(p => (
-                <span
-                  key={p.gramps_id}
-                  className="inline-flex items-center gap-1 px-2 py-1 bg-[#FEF3E2] border border-[#EF9F27] rounded-full text-[12px] text-gray-800"
-                >
-                  {p.name}
-                  {p.birth_year && (
-                    <span className="text-gray-500 text-[11px]">
-                      {' '}{p.birth_year}{p.death_year ? `–${p.death_year}` : ''}
+            <div className="space-y-2 mb-2">
+              {selectedPeople.map(sp => (
+                <div key={sp.person.gramps_id} className="p-2 bg-[#FEF3E2] border border-[#EF9F27] rounded-lg">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[12px] font-medium text-gray-800">
+                      {sp.person.name}
+                      {sp.person.birth_year && (
+                        <span className="text-gray-500 text-[11px] ml-1">
+                          {' '}{sp.person.birth_year}{sp.person.death_year ? `–${sp.person.death_year}` : ''}
+                        </span>
+                      )}
                     </span>
-                  )}
-                  <button
-                    onClick={() => removePerson(p.gramps_id)}
-                    className="text-[#EF9F27] hover:text-[#d88d1f] font-bold leading-none ml-1"
-                  >
-                    ×
-                  </button>
-                </span>
+                    <button
+                      onClick={() => removePerson(sp.person.gramps_id)}
+                      className="text-[#EF9F27] hover:text-[#d88d1f] font-bold leading-none ml-2"
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <input
+                    type="text"
+                    value={sp.notes}
+                    onChange={(e) => updatePersonNotes(sp.person.gramps_id, e.target.value)}
+                    placeholder="Add note (e.g., 'labeled on back', 'front row left')..."
+                    className="w-full px-2 py-1 text-[11px] border border-[#D3D1C7] rounded focus:outline-none focus:border-[#EF9F27]"
+                  />
+                </div>
               ))}
             </div>
           )}
@@ -405,7 +430,7 @@ export default function DocumentUploader({
             {showDropdown && personResults.length > 0 && (
               <div className="absolute z-50 w-full mt-1 bg-white border border-[#D3D1C7] rounded-lg shadow-lg max-h-48 overflow-y-auto">
                 {personResults
-                  .filter(p => !selectedPeople.some(sp => sp.gramps_id === p.gramps_id))
+                  .filter(p => !selectedPeople.some(sp => sp.person.gramps_id === p.gramps_id))
                   .map(p => (
                     <button
                       key={p.gramps_id}

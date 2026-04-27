@@ -18,6 +18,7 @@ export async function POST(req: NextRequest) {
     const contextId = formData.get('context_id') as string     // gramps_id or mystery UUID
     const contextName = formData.get('context_name') as string  // display name
     const documentType = formData.get('document_type') as string
+    const peopleLinksRaw = formData.get('people_links') as string | null
 
     if (!file) {
       return NextResponse.json({ error: 'No file provided' }, { status: 400 })
@@ -77,8 +78,26 @@ export async function POST(req: NextRequest) {
 
     const documentId = docData.id
 
-    // Link to person if context is person
-    if (contextType === 'person' && contextId) {
+    // Link to people if people_links is provided (multiple people with notes)
+    if (peopleLinksRaw) {
+      try {
+        const peopleLinks = JSON.parse(peopleLinksRaw) as Array<{person_id: string, notes: string}>
+        if (Array.isArray(peopleLinks) && peopleLinks.length > 0) {
+          const { error: linkError } = await supabaseService
+            .from('document_people')
+            .insert(peopleLinks.map(link => ({
+              document_id: documentId,
+              person_id: link.person_id,
+              role: 'subject',
+              notes: link.notes || null
+            })))
+          if (linkError) console.warn('[Document/Save] people links error:', linkError.message)
+        }
+      } catch (e) {
+        console.warn('[Document/Save] failed to parse people_links:', e)
+      }
+    } else if (contextType === 'person' && contextId) {
+      // Legacy: single person link
       const { error: linkError } = await supabaseService
         .from('document_people')
         .insert([{ document_id: documentId, person_id: contextId, role: 'subject' }])
