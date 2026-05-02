@@ -232,13 +232,13 @@ async function attachRecentDocuments(
   const lastUserMsg = [...messages].reverse().find((m: any) => m.role === 'user');
   if (!lastUserMsg) return messages;
 
-  let targetDoc: { id: string; title: string; file_path: string; date: string; document_type: string; raw_text?: string; processing_status?: string } | null = null;
+  let targetDoc: { id: string; title: string; file_path: string; date: string; document_type: string; transcription?: string; raw_text?: string; processing_status?: string } | null = null;
 
   // If explicit document ID provided, fetch that directly
   if (explicitDocId) {
     const { data: doc, error } = await supabase
       .from('documents')
-      .select('id, title, file_path, date, document_type, raw_text, processing_status')
+      .select('id, title, file_path, date, document_type, transcription, raw_text, processing_status')
       .eq('id', explicitDocId)
       .single();
     if (!error && doc) {
@@ -253,7 +253,7 @@ async function attachRecentDocuments(
 
     const { data: recentDocs, error } = await supabase
       .from('documents')
-      .select('id, title, file_path, document_type, date, raw_text, processing_status')
+      .select('id, title, file_path, document_type, date, transcription, raw_text, processing_status')
       .order('created_at', { ascending: false })
       .limit(5);
 
@@ -271,27 +271,38 @@ async function attachRecentDocuments(
 
   if (!targetDoc) return messages;
 
-  // ── If document has been analyzed (raw_text populated), use that directly ──
+  // ── If document has been analyzed, use stored transcription and analysis ──
   // This avoids re-downloading and re-extracting from PDFs that only AI can read.
-  if (targetDoc.raw_text && targetDoc.raw_text.length > 20) {
+  const hasTranscription = targetDoc.transcription && targetDoc.transcription.length > 20;
+  const hasAnalysis = targetDoc.raw_text && targetDoc.raw_text.length > 20;
+
+  if (hasTranscription || hasAnalysis) {
+    const contextParts: string[] = [
+      `--- DOCUMENT CONTEXT ---`,
+      `Document: "${targetDoc.title}"`,
+      `Date: ${targetDoc.date || 'unknown'}`,
+      `Type: ${targetDoc.document_type || 'unknown'}`,
+      `Status: ${targetDoc.processing_status || 'unknown'}`,
+    ];
+
+    if (hasTranscription) {
+      contextParts.push(``, `Document text (verbatim):`, targetDoc.transcription!);
+    }
+
+    if (hasAnalysis) {
+      contextParts.push(``, `Prior AI analysis:`, targetDoc.raw_text!);
+    }
+
+    contextParts.push(`--- END DOCUMENT CONTEXT ---`);
+
     const enrichedMsg = {
       ...lastUserMsg,
-      content: `${lastUserMsg.content}
-
---- DOCUMENT CONTEXT ---
-Document: "${targetDoc.title}"
-Date: ${targetDoc.date || 'unknown'}
-Type: ${targetDoc.document_type || 'unknown'}
-Status: ${targetDoc.processing_status || 'unknown'}
-
-Extracted content:
-${targetDoc.raw_text}
---- END DOCUMENT CONTEXT ---`,
+      content: `${lastUserMsg.content}\n\n${contextParts.join('\n')}`,
     };
     const result = [...messages];
     const msgIndex = result.length - 1;
     result[msgIndex] = enrichedMsg;
-    console.log(`[Chat] Used stored raw_text for document "${targetDoc.title}" (${targetDoc.raw_text.length} chars)`);
+    console.log(`[Chat] Used stored context for document "${targetDoc.title}" (transcription: ${targetDoc.transcription?.length || 0} chars, analysis: ${targetDoc.raw_text?.length || 0} chars)`);
     return result;
   }
 

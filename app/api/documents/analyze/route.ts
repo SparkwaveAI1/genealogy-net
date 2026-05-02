@@ -394,9 +394,6 @@ export async function POST(req: NextRequest) {
           rawTextParts.push(`- [${a.action_type}] ${a.description} (${a.confidence || '?'})`)
         }
       }
-      // Include extracted text content if available
-      if (content) rawTextParts.unshift(`EXTRACTED TEXT:\n${content}\n`)
-
       const rawText = rawTextParts.join('\n')
 
       // Unique people with direct or indirect evidence = participant_count
@@ -409,6 +406,7 @@ export async function POST(req: NextRequest) {
       await supabaseService
         .from('documents')
         .update({
+          transcription: content || null,
           raw_text: rawText,
           processing_status: 'analyzed',
           processing_completed_at: new Date().toISOString(),
@@ -417,7 +415,7 @@ export async function POST(req: NextRequest) {
         })
         .eq('id', document_id)
 
-      console.log(`[Analyze] Saved raw_text (${rawText.length} chars) for document ${document_id}`)
+      console.log(`[Analyze] Saved transcription (${content?.length || 0} chars) and raw_text (${rawText.length} chars) for document ${document_id}`)
     } catch (saveErr) {
       console.error('[Analyze] Failed to save analysis to Supabase:', saveErr)
       // Non-fatal — analysis still returned to client
